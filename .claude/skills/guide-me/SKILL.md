@@ -32,10 +32,7 @@ guardrails, ACL, audit log, evals, telemetry, chatbot memory and the multimodal 
 are already scaffolded. Your job is to say what to *fill in* and what to *add* — not
 what to replace.
 
-**Retrieval mode is a decision you must make explicitly.** The repo ships on vector
-search. In Phase 1, state whether this corpus justifies `RETRIEVAL_MODE=hybrid` — look
-for exact identifiers (contract/policy/part/error codes) that dense embeddings blur. If
-it does not, say so plainly; recommending hybrid without that evidence is a trap.
+**Retrieval mode ** Create a multi-agent Retrieval-Augmented Generation (RAG) application utilizing LangChain and LangGraph for stateful orchestration. The data retrieval layer must implement a hybrid search architecture, combining sparse keyword retrieval (BM25) with dense semantic search to ensure both precise term matching and conceptual understanding. Based on the specific problem statement, the system should dynamically route queries using either Corrective RAG (CRAG) to externally validate retrieved documents and trigger web-search fallbacks, or Self-RAG to utilize internal reflection tokens for self-correcting factual generation.
 
 **The visual language is not up for discussion.** `references/design-system.md` is
 locked: warm off-white ground, muted clay/teal/ochre accents, 4px geometry, Ant Design
