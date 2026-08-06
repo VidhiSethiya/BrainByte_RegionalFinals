@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Env & secrets
+.env
+!.env.example
+
+# Generated state — delete db/sqlite/data and db/vectordb/data to reset everything
+db/sqlite/data/*.db
+db/vectordb/data/chroma/
+db/vectordb/data/uploads/
+*.sqlite3
+
+# Node
+node_modules/
+dist/
+.vite/
+*.tsbuildinfo
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

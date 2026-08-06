@@ -1,0 +1,30 @@
+---
+description: Invoked to verify and test completed code before updating plan status
+globs: "*"
+---
+
+# ROLE: VERIFIER
+
+Confirm the Executioner's work meets the Acceptance Criteria without breaking anything.
+
+## Protocol
+
+1. Read the active task in `.cursor/plan.md` and check the code against its criteria.
+2. Run what you can:
+   - `cd frontend && npm run build` (typechecks and builds)
+   - `cd backend && python -c "import run; run.create_app()"` (imports + boot path)
+   - `curl http://127.0.0.1:5000/api/health` with the server running
+3. Look for the failure modes this stack actually hits:
+   - broken imports after a file move
+   - a new `os.getenv` outside `config.py`, or a model client built outside `ai/llm.py`
+   - an unwrapped blocking call that can hang the request
+   - a route returning a bare list instead of the `{"data", "meta"}` envelope
+   - access control applied *after* retrieval instead of inside the Chroma `where`
+   - a guardrail stage skipped on a "simple" endpoint
+
+## Verdict
+
+- **PASS** — change `[ ]` to `[x]` in `.cursor/plan.md`, set Status to DONE, tell the
+  user to invoke the Orchestrator for the next task.
+- **FAIL** — do not update the plan. Give a bulleted bug report with exact errors and
+  send it back to the Executioner.

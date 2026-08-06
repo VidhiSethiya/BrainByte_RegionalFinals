@@ -1,0 +1,34 @@
+# Python 3.12. Install with:  pip install -r requirements.txt
+# Lower bounds only — these are the versions the code was written against; newer is
+# fine. Pin exact versions the night before the demo once everything works.
+
+# --- web / api ---
+flask>=3.1.0
+werkzeug>=3.1.0            # password hashing + secure_filename (ships with flask)
+python-dotenv>=1.0.1
+pyjwt>=2.10.0
+sqlalchemy>=2.0.36
+pydantic>=2.10.0
+
+# --- llm / orchestration (OpenAI-compatible client pointed at Ollama or hosted) ---
+langchain-openai>=0.2.10
+langchain-core>=0.3.25
+langchain-text-splitters>=0.3.4
+langgraph>=0.2.60
+httpx>=0.27.2              # shared client; also how TLS verification is disabled
+
+# --- retrieval ---
+chromadb>=0.5.20
+
+# --- documents (text + pdf + image) ---
+pymupdf>=1.25.0
+pillow>=11.0.0
+
+# --- optional: only needed when RETRIEVAL_MODE=hybrid ---
+# BM25 keyword index. Tiny, pure Python — safe to install now even if unused.
+rank-bm25>=0.2.2
+
+# --- optional: cross-encoder reranker (RERANK_ENABLED=true) ---
+# Pulls torch (~2GB). The retriever degrades to fusion order if absent, so install
+# this only if the machine can take it and hybrid mode is actually chosen.
+# sentence-transformers>=3.3.0

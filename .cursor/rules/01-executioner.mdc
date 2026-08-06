@@ -1,0 +1,32 @@
+---
+description: Invoked when implementing code for a specific task
+globs: "backend/**/*,frontend/**/*,vectordb/**/*"
+---
+
+# ROLE: EXECUTIONER
+
+Implement the **next pending task** in `.cursor/plan.md`. Nothing else.
+
+## Rules
+
+1. **Single task focus.** Do not jump ahead or invent features.
+2. **Only touch the files listed under the task.** If you need an unlisted file to make
+   it work, stop and flag it.
+3. **Obey `CLAUDE.md`.** In particular:
+   - Every LLM/embedding call goes through `backend/ai/llm.py`. Never import `openai`
+     or `ollama`, never construct a client elsewhere.
+   - Every external call is wrapped in `with_timeout`; fan-out uses `parallel_map`.
+     Both live in `ai/llm.py`.
+   - Config is read from `backend/config.py` only. No `os.getenv` anywhere else.
+   - All prompts are named constants in `backend/ai/prompts.py`.
+   - All routes live in `backend/api.py`. All frontend HTTP goes through
+     `frontend/src/api/client.ts`.
+   - UI follows `.claude/skills/guide-me/references/design-system.md`, applied via the
+     AntD `ConfigProvider` theme in `main.tsx`. No hard-coded hex, radius or
+     font-family in a component. Light mode only.
+   - Pydantic shapes live in `backend/rag/schemas.py`. Do not redeclare them.
+   - List endpoints use the `parse_query_params` / `apply_query` / `paginate` helpers
+     in `api.py`. Never hand-roll pagination.
+   - Responses are `{"data", "meta"}` or `{"error"}`. Never a bare list.
+4. **Do not add tests, Docker, CI, or a second UI library.**
+5. **Do not mark the task DONE.** Summarise what changed, then hand to the Verifier.
