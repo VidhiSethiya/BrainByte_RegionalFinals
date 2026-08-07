@@ -17,6 +17,7 @@ import {
   CHART_HEIGHT,
   GRID,
   SERIES,
+  animationFor,
   axisProps,
   legendProps,
   tooltipProps,
@@ -111,7 +112,7 @@ export default function Dashboard() {
         ))}
       </Row>
 
-      <Card size="small" title="Latency and groundedness per turn">
+      <Card size="small" title="Latency and groundedness per turn" className="chart-card">
         {metrics.isPending ? (
           <Skeleton active paragraph={{ rows: 5 }} />
         ) : series.length === 0 ? (
@@ -135,6 +136,7 @@ export default function Dashboard() {
                 stroke={SERIES[0]}
                 dot={false}
                 strokeWidth={2}
+                {...animationFor(0)}
               />
               <Line
                 yAxisId="right"
@@ -143,6 +145,7 @@ export default function Dashboard() {
                 stroke={SERIES[1]}
                 dot={false}
                 strokeWidth={2}
+                {...animationFor(1)}
               />
             </LineChart>
           </ResponsiveContainer>

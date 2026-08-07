@@ -1,28 +1,30 @@
+/* Ocean Teal. Colour lives here and in main.tsx / chartTheme.ts, nowhere else. */
 :root {
-  --bg-app: #FCFBF8;
+  --bg-app: #F6F9FA;
   --bg-surface: #FFFFFF;
-  --bg-surface-alt: #F5F4F0;
+  --bg-surface-alt: #EDF4F6;
 
-  --accent: #C45A5E;            /* non-text use only */
-  --accent-action: #A84A4D;     /* text-bearing fills */
-  --accent-action-hover: #8F3E41;
-  --accent-secondary: #4A7C82;
-  --structural-navy: #2E3B4E;
+  --accent: #35A0B5;            /* non-text use only */
+  --accent-action: #027289;     /* text-bearing fills */
+  --accent-action-hover: #015C6E;
+  --accent-secondary: #0E8FA8;
+  --accent-soft: #E6F2F5;
+  --structural-navy: #14304A;
 
-  --text-primary: #1A1A1A;
-  --text-secondary: #5E5E5E;
-  --text-tertiary: #8A8A8A;
-  --border-color: #EBE9E1;
+  --text-primary: #12233F;
+  --text-secondary: #5A6B7B;
+  --text-tertiary: #8B9AA8;
+  --border-color: #E1EBEF;
 
-  --success: #4F7A5B;
-  --warning: #B08D57;
-  --error: #A84A4D;
-  --info: #4A7C82;
+  --success: #0E8A6E;
+  --warning: #DE8433;
+  --error: #D6455D;
+  --info: #0E8FA8;
 
-  --tint-error: rgba(168, 74, 77, 0.08);
-  --tint-warning: rgba(176, 141, 87, 0.10);
-  --tint-info: rgba(74, 124, 130, 0.08);
-  --tint-success: rgba(79, 122, 91, 0.08);
+  --tint-error: rgba(214, 69, 93, 0.08);
+  --tint-warning: rgba(222, 132, 51, 0.10);
+  --tint-info: rgba(14, 143, 168, 0.08);
+  --tint-success: rgba(14, 138, 110, 0.08);
 
   --font-body: 'JJ Circular Std Book', 'Circular Std', 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
   --font-heading: 'JJ Circular Std Black', 'Circular Std', 'Inter', system-ui, sans-serif;
@@ -30,10 +32,15 @@
   --radius-sm: 4px;
   --radius-md: 8px;
   --space: 8px;
-  --shadow-card: 0 4px 12px rgba(0, 0, 0, 0.03);
-  --shadow-float: 0 8px 24px rgba(0, 0, 0, 0.06);
+  --shadow-card: 0 4px 12px rgba(18, 35, 63, 0.04);
+  --shadow-hover: 0 10px 24px rgba(2, 114, 137, 0.10);
+  --shadow-float: 0 10px 28px rgba(18, 35, 63, 0.10);
 
-  --glass-bg: rgba(252, 251, 248, 0.72);
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --dur-fast: 140ms;
+  --dur-base: 220ms;
+
+  --glass-bg: rgba(246, 249, 250, 0.78);
   --glass-blur: blur(12px) saturate(115%);
 }
 
@@ -276,8 +283,137 @@ h1 {
 }
 
 @keyframes ts-ring {
-  0% { box-shadow: 0 0 0 0 rgba(196, 90, 94, 0.35); }
-  100% { box-shadow: 0 0 0 8px rgba(196, 90, 94, 0); }
+  0% { box-shadow: 0 0 0 0 rgba(2, 114, 137, 0.35); }
+  100% { box-shadow: 0 0 0 8px rgba(2, 114, 137, 0); }
+}
+
+/* ---- motion ---------------------------------------------------------------
+   Short, low-travel and interruptible. Every rule below is switched off by the
+   prefers-reduced-motion block at the bottom of this file. */
+
+/* Cards lift on hover. AntD cards, our stat tiles and the chart cards all get
+   it from one rule so eight surfaces cannot drift into eight behaviours. */
+.ant-card {
+  transition:
+    transform var(--dur-base) var(--ease-out),
+    box-shadow var(--dur-base) var(--ease-out),
+    border-color var(--dur-base) var(--ease-out);
+}
+
+.ant-card:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-hover);
+  border-color: color-mix(in srgb, var(--accent-action) 25%, var(--border-color));
+}
+
+/* A card whose whole body is a control gets a stronger affordance. */
+.is-interactive {
+  cursor: pointer;
+}
+
+.is-interactive:active {
+  transform: translateY(0);
+}
+
+/* Stat tiles: lift, and pull the accent rail in from the left edge. */
+.stat-tile {
+  position: relative;
+  overflow: hidden;
+}
+
+.stat-tile::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 3px;
+  background: var(--accent-action);
+  transform: scaleY(0);
+  transform-origin: bottom;
+  transition: transform var(--dur-base) var(--ease-out);
+}
+
+.stat-tile:hover::before {
+  transform: scaleY(1);
+}
+
+.stat-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: var(--accent-soft);
+  color: var(--accent-action);
+  font-size: 16px;
+  flex: none;
+  transition: transform var(--dur-base) var(--ease-out);
+}
+
+.stat-tile:hover .stat-icon {
+  transform: scale(1.06);
+}
+
+/* Sparkline draws itself in once, left to right. */
+.sparkline {
+  display: block;
+  margin-top: 2px;
+}
+
+.sparkline path {
+  vector-effect: non-scaling-stroke;
+  stroke-dasharray: 200;
+  stroke-dashoffset: 200;
+  animation: ts-draw 900ms var(--ease-out) forwards;
+}
+
+@keyframes ts-draw {
+  to { stroke-dashoffset: 0; }
+}
+
+/* Buttons and menu items: colour and lift, never a size jump. */
+.ant-btn {
+  transition:
+    background-color var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-fast) var(--ease-out),
+    transform var(--dur-fast) var(--ease-out);
+}
+
+.ant-btn:not(:disabled):hover {
+  transform: translateY(-1px);
+}
+
+.ant-btn:not(:disabled):active {
+  transform: translateY(0);
+}
+
+.ant-menu-item {
+  transition:
+    background-color var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out),
+    padding-inline-start var(--dur-fast) var(--ease-out);
+}
+
+.ant-menu-item:hover {
+  padding-inline-start: 28px !important;
+}
+
+/* Table rows: the hover tint comes from the theme; this adds the cursor cue. */
+.ant-table-tbody > tr > td {
+  transition: background-color var(--dur-fast) var(--ease-out);
+}
+
+/* Page content fades up on mount — one small move, 180ms, no stagger cascade. */
+.page-enter {
+  animation: ts-fade-in var(--dur-base) var(--ease-out) both;
+}
+
+/* Charts animate their own series (Recharts `isAnimationActive`); this is the
+   card they sit in. */
+.chart-card .recharts-wrapper {
+  animation: ts-fade-in var(--dur-base) var(--ease-out) both;
 }
 
 @keyframes ts-fade-in {
@@ -292,6 +428,41 @@ h1 {
 /* Never put a white card on a white page — the sider needs its own edge. */
 .app-sider {
   border-right: 1px solid var(--border-color);
+}
+
+/* Sider footer: pinned to the bottom, above the collapse rail. */
+.app-sider .ant-layout-sider-children {
+  display: flex;
+  flex-direction: column;
+}
+
+.sider-user {
+  margin-top: auto;
+  padding: 12px 16px;
+  border-top: 1px solid var(--border-color);
+  overflow: hidden;
+}
+
+.status-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--success);
+  margin-inline-end: 4px;
+  vertical-align: middle;
+}
+
+/* The selected nav item carries a teal rail, not just a tint. */
+.ant-menu-item-selected::before {
+  content: "";
+  position: absolute;
+  inset-inline-start: 0;
+  top: 6px;
+  bottom: 6px;
+  width: 3px;
+  border-radius: 0 2px 2px 0;
+  background: var(--accent-action);
 }
 
 .brand-block {
@@ -398,5 +569,20 @@ h1 {
     animation-duration: 0.001ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.001ms !important;
+  }
+
+  /* Movement is the part that hurts — remove it, keep the colour change. */
+  .ant-card:hover,
+  .ant-btn:not(:disabled):hover,
+  .stat-tile:hover .stat-icon {
+    transform: none;
+  }
+
+  .ant-menu-item:hover {
+    padding-inline-start: 24px !important;
+  }
+
+  .sparkline path {
+    stroke-dashoffset: 0;
   }
 }

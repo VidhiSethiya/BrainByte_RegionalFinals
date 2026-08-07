@@ -916,11 +916,17 @@ def ingest_and_triage(raw_ticket: dict, user: dict) -> tuple[TicketRow, TriageSt
                     application=str(raw_ticket.get("application") or ""),
                     environment=str(raw_ticket.get("environment") or "prod"),
                     channel=str(raw_ticket.get("channel") or ""),
+                    reporter=str(raw_ticket.get("reporter") or ""),
+                    assignee=str(raw_ticket.get("assignee") or ""),
                     status="new",
                 )
                 s.add(row)
             else:
                 row.title = str(raw_ticket.get("title") or row.title)
+                # A ticket re-fetched from the poller may have picked up a new
+                # assignee since the last cycle; reporter never changes post-hoc.
+                if raw_ticket.get("assignee"):
+                    row.assignee = str(raw_ticket["assignee"])
             s.commit()
             s.refresh(row)
             row_id = row.id

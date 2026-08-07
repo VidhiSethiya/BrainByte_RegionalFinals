@@ -19,7 +19,7 @@ import {
   UnorderedListOutlined,
 } from "@ant-design/icons";
 import { useQuery } from "@tanstack/react-query";
-import { Button, Dropdown, Flex, Layout, Menu, Skeleton, Space, Tag, Tooltip, Typography } from "antd";
+import { Avatar, Button, Dropdown, Flex, Layout, Menu, Skeleton, Space, Tag, Tooltip, Typography } from "antd";
 import { Outlet, useLocation, useNavigate } from "react-router-dom";
 
 import { api, auth } from "../api/client";
@@ -95,6 +95,23 @@ export default function AppLayout() {
           onClick={({ key }) => navigate(key)}
           style={{ borderInlineEnd: "none", paddingTop: 8 }}
         />
+
+        {/* Who am I, and am I still connected — answered without opening a menu. */}
+        <div className="sider-user">
+          <Flex align="center" gap={8}>
+            <Avatar size={28} style={{ background: "var(--accent-action)" }}>
+              {(me?.username ?? "?").charAt(0).toUpperCase()}
+            </Avatar>
+            <Flex vertical style={{ minWidth: 0 }}>
+              <Typography.Text ellipsis style={{ fontSize: 13, textTransform: "capitalize" }}>
+                {me?.role ?? "…"}
+              </Typography.Text>
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                <span className="status-dot" aria-hidden="true" /> Online
+              </Typography.Text>
+            </Flex>
+          </Flex>
+        </div>
       </Sider>
 
       <Layout>
@@ -164,7 +181,8 @@ export default function AppLayout() {
           </Space>
         </Header>
 
-        <Content style={{ padding: 24 }}>
+        {/* Keyed on the route so each screen fades up on entry rather than snapping. */}
+        <Content style={{ padding: 24 }} className="page-enter" key={location.pathname}>
           <Outlet />
         </Content>
 

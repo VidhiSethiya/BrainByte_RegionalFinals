@@ -420,7 +420,7 @@ def delete_session(session_id: str):
 
 @api_bp.post("/documents/upload")
 @require_auth
-@require_role("admin", "analyst")
+@require_role("admin", "manager")
 @rate_limit(per_minute=20)
 def upload_document():
     uploaded = request.files.get("file")
@@ -448,7 +448,7 @@ def upload_document():
 
 @api_bp.post("/documents/text")
 @require_auth
-@require_role("admin", "analyst")
+@require_role("admin", "manager")
 @rate_limit(per_minute=20)
 def ingest_text():
     body = request.get_json(silent=True) or {}
@@ -752,20 +752,14 @@ def integrations_webhook():
     """
     body = request.get_json(silent=True) or {}
     issue = body.get("issue") or body
-    fields = issue.get("fields") or {}
 
-    from integrations.jira import adf_to_text
+    # Same transformation the poller uses (integrations.jira.issue_to_ticket_dict)
+    # — not a hand-rolled second copy. That duplication is exactly what caused
+    # reporter/assignee to go missing here the first time this route was written.
+    from integrations.jira import issue_to_ticket_dict
 
-    raw = {
-        "external_id": issue.get("key", ""),
-        "source": "jira",
-        "title": fields.get("summary", ""),
-        "body": adf_to_text(fields.get("description")) or fields.get("description", ""),
-        "application": "",
-        "environment": "prod",
-        "channel": "jira-webhook",
-        "raw": body,
-    }
+    raw = issue_to_ticket_dict(issue)
+    raw["channel"] = "jira-webhook"
     if not raw["external_id"] or not raw["title"]:
         return fail("validation_error", "issue.key and fields.summary are required", 422)
 
@@ -773,6 +767,16 @@ def integrations_webhook():
     row, state = ingest_and_triage(raw, system_user)
     audit.record("integrations.webhook_received", resource=row.id, external_id=row.external_id)
     return ok({"ticket_id": row.id, "status": row.status, "blocked": state.get("blocked", False)})
+
+
+@api_bp.get("/analytics/triage")
+@require_auth
+def analytics_triage():
+    """Backs the Control Tower dashboard entirely — frontend/FRONTEND_SPEC.md
+    §6.1's TriageAnalytics shape, matched field-for-field. Every number is a SQL
+    aggregate or a stored-vs-gold-label comparison; see
+    ai/tools.py::triage_analytics()."""
+    return ok(tools.triage_analytics(g.user))
 
 
 # --- feedback / human-in-the-loop -------------------------------------------
@@ -805,7 +809,7 @@ def submit_feedback():
 
 @api_bp.get("/feedback")
 @require_auth
-@require_role("admin", "analyst")
+@require_role("admin", "manager")
 def list_feedback():
     """The HITL review queue — filter[reviewed]=false for the open items."""
     params = parse_query_params()
@@ -817,7 +821,7 @@ def list_feedback():
 
 @api_bp.patch("/feedback/<feedback_id>/review")
 @require_auth
-@require_role("admin", "analyst")
+@require_role("admin", "manager")
 def review_feedback(feedback_id: str):
     with SessionLocal() as s:
         entry = s.get(Feedback, feedback_id)
@@ -1065,12 +1069,30 @@ def analytics_messages():
 
 @api_bp.post("/evals/run")
 @require_auth
-@require_role("admin", "analyst")
+@require_role("admin", "manager")
 @rate_limit(per_minute=3)
 def run_evals():
     body = request.get_json(silent=True) or {}
     result = evals.run_eval_set(g.user, questions=body.get("questions"))
     audit.record("evals.run", user_id=g.user["id"], cases=result["cases"])
+    return ok(result)
+
+
+@api_bp.post("/evals/run-triage")
+@require_auth
+@require_role("admin", "manager")
+@rate_limit(per_minute=2)
+def run_triage_evals():
+    """The rigorous version: re-triages every held-out ticket fresh through the
+    full graph before scoring — classification accuracy, routing precision,
+    severity MAE, confusion matrix. Expensive (minutes per ticket on local
+    Ollama), so it is capped at a low rate limit and defaults to a small batch,
+    not the ticket-analytics dashboard's fast stored-value path."""
+    body = request.get_json(silent=True) or {}
+    result = evals.score_triage_accuracy(
+        limit=int(body.get("limit") or 25), rerun=True, user=g.user
+    )
+    audit.record("evals.triage_run", user_id=g.user["id"], cases=result["cases"])
     return ok(result)
 
 

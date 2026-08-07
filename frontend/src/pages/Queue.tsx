@@ -9,7 +9,14 @@
  * on this page is computed in the browser from the page of rows it happens to hold.
  */
 
-import { QuestionCircleOutlined, ReloadOutlined } from "@ant-design/icons";
+import {
+  ExclamationCircleOutlined,
+  FileTextOutlined,
+  HourglassOutlined,
+  QuestionCircleOutlined,
+  ReloadOutlined,
+  SafetyCertificateOutlined,
+} from "@ant-design/icons";
 import { useQuery } from "@tanstack/react-query";
 import { Button, Card, Col, Flex, Input, Row, Select, Space, Tooltip, Typography } from "antd";
 import type { InputRef } from "antd";
@@ -162,12 +169,21 @@ export default function Queue() {
 
       <Row gutter={[16, 16]}>
         <Col xs={12} lg={6}>
-          <StatTile label="Open" value={totalOpen} loading={analytics.isPending} hint="Tickets not yet resolved" />
+          <StatTile
+            label="Open"
+            value={totalOpen}
+            icon={<FileTextOutlined />}
+            caption="Active tickets"
+            loading={analytics.isPending}
+            hint="Tickets not yet resolved"
+          />
         </Col>
         <Col xs={12} lg={6}>
           <StatTile
             label="S1 open"
             value={s1Open}
+            icon={<ExclamationCircleOutlined />}
+            caption="Critical priority"
             tone={s1Open ? "error" : "default"}
             loading={analytics.isPending}
             hint="Critical incidents currently open"
@@ -177,6 +193,8 @@ export default function Queue() {
           <StatTile
             label="SLA at risk"
             value={open?.sla_at_risk}
+            icon={<SafetyCertificateOutlined />}
+            caption="Needs attention"
             tone={open?.sla_at_risk ? "warning" : "default"}
             loading={analytics.isPending}
             hint="Under 30 minutes to the response target"
@@ -186,6 +204,8 @@ export default function Queue() {
           <StatTile
             label="Awaiting review"
             value={open?.awaiting_approval}
+            icon={<HourglassOutlined />}
+            caption="Pending review"
             tone={open?.awaiting_approval ? "warning" : "default"}
             loading={analytics.isPending}
             hint="Decisions the system stopped and handed to a human"
