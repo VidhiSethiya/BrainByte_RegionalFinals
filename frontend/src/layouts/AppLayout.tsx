@@ -1,100 +1,176 @@
+/**
+ * The shell: sider (surface-alt), header (white, glass), content (cream).
+ *
+ * Nav is filtered by role as a courtesy — the security boundary is the API, which
+ * scopes every query by the token. An engineer who types `/control` still gets a 403
+ * from the server, and that is the check that matters.
+ */
+
 import {
+  ApartmentOutlined,
   AuditOutlined,
   DashboardOutlined,
   ExperimentOutlined,
   FileTextOutlined,
+  HistoryOutlined,
   LogoutOutlined,
   MessageOutlined,
+  ThunderboltOutlined,
+  UnorderedListOutlined,
 } from "@ant-design/icons";
 import { useQuery } from "@tanstack/react-query";
-import { Layout, Menu, Space, Tag, Typography, Button } from "antd";
+import { Button, Dropdown, Flex, Layout, Menu, Skeleton, Space, Tag, Tooltip, Typography } from "antd";
 import { Outlet, useLocation, useNavigate } from "react-router-dom";
 
 import { api, auth } from "../api/client";
 import ChatbotDrawer from "../components/ChatbotDrawer";
+import Logo from "../components/Logo";
 
 const { Header, Sider, Content } = Layout;
 
-const NAV = [
-  { key: "/dashboard", icon: <DashboardOutlined />, label: "Dashboard" },
-  { key: "/chat", icon: <MessageOutlined />, label: "Assistant" },
-  { key: "/documents", icon: <FileTextOutlined />, label: "Knowledge Base" },
-  { key: "/evals", icon: <ExperimentOutlined />, label: "Evaluations" },
-  { key: "/audit", icon: <AuditOutlined />, label: "Audit Trail" },
+const TAGLINE = "An enterprise AI ticket intelligence platform";
+
+interface NavItem {
+  key: string;
+  icon: React.ReactNode;
+  label: string;
+  managerOnly?: boolean;
+}
+
+const NAV: NavItem[] = [
+  { key: "/queue", icon: <UnorderedListOutlined />, label: "My Queue" },
+  { key: "/triage", icon: <ThunderboltOutlined />, label: "Triage" },
+  { key: "/history", icon: <HistoryOutlined />, label: "History" },
+  { key: "/control", icon: <ApartmentOutlined />, label: "Control Tower", managerOnly: true },
+  { key: "/chat", icon: <MessageOutlined />, label: "Assistant", managerOnly: true },
+  { key: "/documents", icon: <FileTextOutlined />, label: "Knowledge Base", managerOnly: true },
+  { key: "/evals", icon: <ExperimentOutlined />, label: "Evaluations", managerOnly: true },
+  { key: "/audit", icon: <AuditOutlined />, label: "Audit Trail", managerOnly: true },
+  { key: "/dashboard", icon: <DashboardOutlined />, label: "Dashboard", managerOnly: true },
 ];
+
+export function isManagerRole(role?: string) {
+  return role === "manager" || role === "admin";
+}
 
 export default function AppLayout() {
   const navigate = useNavigate();
   const location = useLocation();
 
-  // Health drives the header badge — the fastest way to show a judge whether the
-  // demo is on local Ollama or a hosted endpoint.
+  const { data: me } = useQuery({
+    queryKey: ["me"],
+    queryFn: () => api.me().then((r) => r.data),
+    staleTime: 5 * 60_000,
+  });
+
+  // Health drives the header badges — the fastest way to show whether the demo is
+  // running on a hosted endpoint or a local model, and how big the index is.
   const { data: health } = useQuery({
     queryKey: ["health"],
     queryFn: () => api.health().then((r) => r.data),
     refetchInterval: 30_000,
   });
 
+  const manager = isManagerRole(me?.role);
+  const items = NAV.filter((item) => !item.managerOnly || manager).map(({ managerOnly: _managerOnly, ...item }) => item);
+  const lastAnswer = health?.last_answer;
+
+  function signOut() {
+    auth.clear();
+    navigate("/login", { replace: true });
+  }
+
   return (
     <Layout style={{ minHeight: "100vh" }}>
-      <Sider breakpoint="lg" collapsedWidth="60" theme="light">
-        <div style={{ padding: 16, fontWeight: 600, fontSize: 15 }}>
-          {/* [PLACEHOLDER: PRODUCT_NAME] */}
-          Enterprise AI
+      <Sider breakpoint="lg" collapsedWidth="60" theme="light" className="app-sider" width={220}>
+        <div className="brand-block">
+          <Logo size={28} variant="mark" />
+          <span className="brand-wordmark">TicketSphere</span>
         </div>
+
         <Menu
           mode="inline"
-          selectedKeys={[location.pathname]}
-          items={NAV}
+          selectedKeys={[`/${location.pathname.split("/")[1]}`]}
+          items={items}
           onClick={({ key }) => navigate(key)}
+          style={{ borderInlineEnd: "none", paddingTop: 8 }}
         />
       </Sider>
 
       <Layout>
         <Header
+          className="glass-header"
           style={{
-            background: "#fff",
-            borderBottom: "1px solid #f0f0f0",
             display: "flex",
             alignItems: "center",
             justifyContent: "space-between",
-            paddingInline: 20,
+            gap: 16,
+            paddingInline: 24,
+            position: "sticky",
+            top: 0,
+            zIndex: 10,
           }}
         >
-          <Typography.Text type="secondary">
-            {/* [PLACEHOLDER: TAGLINE — one line describing what the system does] */}
-            Grounded, governed answers over your enterprise corpus
-          </Typography.Text>
+          <span className="header-tagline">{TAGLINE}</span>
 
-          <Space>
-            {health && (
+          <Space size={8} wrap>
+            {health ? (
               <>
-                <Tag color={health.provider === "hosted" ? "blue" : "green"}>
-                  {health.provider} · {health.chat_model}
-                </Tag>
-                <Tag color="purple">{health.retrieval_mode} retrieval</Tag>
-                <Tag>{health.indexed_chunks} chunks</Tag>
+                <Tooltip title="Model provider and chat model currently serving decisions">
+                  <Tag color="processing">
+                    {health.provider} · {health.chat_model}
+                  </Tag>
+                </Tooltip>
+                <Tooltip title="Retrieval strategy behind every citation">
+                  <Tag color="processing">{health.retrieval_mode} retrieval</Tag>
+                </Tooltip>
+                <Tooltip title="Chunks currently indexed in the knowledge base">
+                  <Tag>
+                    <span className="tabular">{health.indexed_chunks?.toLocaleString?.() ?? health.indexed_chunks}</span>{" "}
+                    chunks
+                  </Tag>
+                </Tooltip>
               </>
+            ) : (
+              <Skeleton.Input active size="small" style={{ width: 220 }} />
             )}
-            <Button
-              icon={<LogoutOutlined />}
-              size="small"
-              onClick={() => {
-                auth.clear();
-                navigate("/login");
+
+            {lastAnswer && (
+              <Tooltip title="Cost and latency of the most recent model call">
+                <Typography.Text type="secondary" className="tabular" style={{ fontSize: 12 }}>
+                  last answer {(lastAnswer.latency_ms / 1000).toFixed(1)}s ·{" "}
+                  {lastAnswer.total_tokens?.toLocaleString?.() ?? lastAnswer.total_tokens} tok · $
+                  {Number(lastAnswer.cost_usd ?? 0).toFixed(4)}
+                </Typography.Text>
+              </Tooltip>
+            )}
+
+            <Dropdown
+              menu={{
+                items: [
+                  { key: "who", label: `${me?.username ?? "…"} · ${me?.role ?? ""}`, disabled: true },
+                  { type: "divider" },
+                  { key: "signout", icon: <LogoutOutlined />, label: "Sign out", onClick: signOut },
+                ],
               }}
             >
-              Sign out
-            </Button>
+              <Button type="text" style={{ paddingInline: 8 }}>
+                <Flex align="center" gap={8}>
+                  <Typography.Text strong>{me?.username ?? "…"}</Typography.Text>
+                  {me?.role && <Tag color={manager ? "warning" : "default"}>{me.role}</Tag>}
+                </Flex>
+              </Button>
+            </Dropdown>
           </Space>
         </Header>
 
-        <Content style={{ padding: 20, background: "#f5f5f5" }}>
+        <Content style={{ padding: 24 }}>
           <Outlet />
         </Content>
 
-        {/* Single-session knowledge-base assistant, reachable from every page. */}
-        <ChatbotDrawer />
+        {/* The assistant is a manager surface (spec §9.8) — reachable from every
+            manager page, absent for engineers. */}
+        {manager && <ChatbotDrawer />}
       </Layout>
     </Layout>
   );

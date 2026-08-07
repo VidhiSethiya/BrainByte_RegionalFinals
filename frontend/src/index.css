@@ -1,0 +1,402 @@
+:root {
+  --bg-app: #FCFBF8;
+  --bg-surface: #FFFFFF;
+  --bg-surface-alt: #F5F4F0;
+
+  --accent: #C45A5E;            /* non-text use only */
+  --accent-action: #A84A4D;     /* text-bearing fills */
+  --accent-action-hover: #8F3E41;
+  --accent-secondary: #4A7C82;
+  --structural-navy: #2E3B4E;
+
+  --text-primary: #1A1A1A;
+  --text-secondary: #5E5E5E;
+  --text-tertiary: #8A8A8A;
+  --border-color: #EBE9E1;
+
+  --success: #4F7A5B;
+  --warning: #B08D57;
+  --error: #A84A4D;
+  --info: #4A7C82;
+
+  --tint-error: rgba(168, 74, 77, 0.08);
+  --tint-warning: rgba(176, 141, 87, 0.10);
+  --tint-info: rgba(74, 124, 130, 0.08);
+  --tint-success: rgba(79, 122, 91, 0.08);
+
+  --font-body: 'JJ Circular Std Book', 'Circular Std', 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-heading: 'JJ Circular Std Black', 'Circular Std', 'Inter', system-ui, sans-serif;
+
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --space: 8px;
+  --shadow-card: 0 4px 12px rgba(0, 0, 0, 0.03);
+  --shadow-float: 0 8px 24px rgba(0, 0, 0, 0.06);
+
+  --glass-bg: rgba(252, 251, 248, 0.72);
+  --glass-blur: blur(12px) saturate(115%);
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg-app);
+  color: var(--text-primary);
+  font-family: var(--font-body);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+h1,
+h2,
+h3 {
+  font-family: var(--font-heading);
+  color: var(--text-primary);
+}
+
+h1 {
+  font-size: 32px;
+  line-height: 40px;
+  letter-spacing: -0.02em;
+}
+
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- authored surfaces ---------------------------------------------------
+   Everything else takes the AntD theme in main.tsx. These are the handful of
+   elements we draw ourselves. */
+
+/* Page title block, one per screen. */
+.page-title {
+  font-family: var(--font-heading);
+  font-size: 32px;
+  line-height: 40px;
+  letter-spacing: -0.02em;
+  margin: 0;
+}
+
+.page-subtitle {
+  color: var(--text-secondary);
+  font-size: 14px;
+  margin: 0;
+}
+
+/* 12px uppercase label — form labels, stat captions, citation chips. */
+.label {
+  font-size: 12px;
+  line-height: 16px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.data {
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Glass is allowed only on floating chrome (spec §4.5) and never on a
+   scrolling surface — backdrop-filter repaints every frame. */
+.glass-header {
+  background: var(--glass-bg);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  border-bottom: 1px solid var(--border-color);
+}
+
+/* Blocked / degraded state: a feature, styled intentionally. */
+.blocked-panel {
+  background: var(--tint-error);
+  border: 1px solid var(--error);
+  border-radius: var(--radius-md);
+  padding: 16px;
+}
+
+/* Suggested first action — recommendation, never an executed step. */
+.recommendation {
+  background: var(--tint-warning);
+  border-left: 3px solid var(--warning);
+  border-radius: var(--radius-sm);
+  padding: 16px;
+}
+
+.citation-chip {
+  display: inline-flex;
+  align-items: center;
+  font-size: 12px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--accent-secondary);
+  border: 1px solid var(--accent-secondary);
+  border-radius: var(--radius-sm);
+  padding: 0 6px;
+  margin: 0 2px;
+  cursor: pointer;
+  background: transparent;
+  line-height: 18px;
+}
+
+.citation-chip:hover,
+.citation-chip:focus-visible {
+  background: var(--tint-info);
+}
+
+.evidence-item {
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  padding: 12px;
+  transition: background 160ms ease, border-color 160ms ease;
+}
+
+.evidence-item.is-highlighted {
+  background: var(--tint-info);
+  border-color: var(--accent-secondary);
+}
+
+/* Markdown rendered inside cards and drawers. */
+.markdown-body p {
+  margin: 0 0 8px;
+}
+
+.markdown-body p:last-child {
+  margin-bottom: 0;
+}
+
+.markdown-body ul,
+.markdown-body ol {
+  margin: 0 0 8px;
+  padding-inline-start: 20px;
+}
+
+.markdown-body code {
+  font-size: 13px;
+  background: var(--bg-surface-alt);
+  border-radius: var(--radius-sm);
+  padding: 1px 4px;
+}
+
+/* Chat bubbles — tokens only, no hard-coded hex in the component. */
+.bubble {
+  border-radius: var(--radius-md);
+  padding: 8px 12px;
+  border: 1px solid transparent;
+}
+
+.bubble-user {
+  background: var(--bg-surface-alt);
+  border-color: var(--border-color);
+}
+
+.bubble-assistant {
+  background: var(--bg-surface);
+  border-color: var(--border-color);
+}
+
+.bubble-blocked {
+  background: var(--tint-error);
+  border-color: var(--error);
+}
+
+/* GraphRunner ------------------------------------------------------------- */
+.graph-node {
+  display: flex;
+  gap: 12px;
+  padding: 8px 0;
+}
+
+.graph-rail {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 16px;
+}
+
+.graph-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 2px solid var(--border-color);
+  background: var(--bg-surface);
+  flex: none;
+  margin-top: 5px;
+}
+
+.graph-dot.is-running {
+  border-color: var(--accent);
+  background: var(--accent);
+  animation: ts-pulse 1.2s ease-in-out infinite;
+}
+
+.graph-dot.is-done {
+  border-color: var(--success);
+  background: var(--success);
+}
+
+.graph-dot.is-failed {
+  border-color: var(--error);
+  background: var(--error);
+}
+
+.graph-dot.is-skipped {
+  border-style: dashed;
+}
+
+.graph-line {
+  flex: 1;
+  width: 2px;
+  background: var(--border-color);
+  margin-top: 4px;
+  min-height: 12px;
+}
+
+.graph-retry {
+  border-left: 2px dashed var(--warning);
+  margin-left: 4px;
+  padding-left: 16px;
+  color: var(--warning);
+  font-size: 12px;
+}
+
+/* Voice ------------------------------------------------------------------- */
+.voice-listening {
+  animation: ts-ring 1.4s ease-out infinite;
+  border-radius: var(--radius-sm);
+}
+
+@keyframes ts-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+@keyframes ts-ring {
+  0% { box-shadow: 0 0 0 0 rgba(196, 90, 94, 0.35); }
+  100% { box-shadow: 0 0 0 8px rgba(196, 90, 94, 0); }
+}
+
+@keyframes ts-fade-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: none; }
+}
+
+.fade-in {
+  animation: ts-fade-in 180ms ease-out both;
+}
+
+/* Never put a white card on a white page — the sider needs its own edge. */
+.app-sider {
+  border-right: 1px solid var(--border-color);
+}
+
+.brand-block {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 16px;
+  height: 56px;
+  box-sizing: border-box;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.brand-wordmark {
+  font-family: var(--font-heading);
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+
+.header-tagline {
+  color: var(--text-secondary);
+  font-size: 14px;
+}
+
+@media (max-width: 991px) {
+  .header-tagline {
+    display: none;
+  }
+}
+
+/* Confidence bar — text always accompanies it (spec §8.5). */
+.confidence-bar {
+  width: 48px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--bg-surface-alt);
+  overflow: hidden;
+  flex: none;
+}
+
+.confidence-bar > span {
+  display: block;
+  height: 100%;
+}
+
+.confidence-bar.is-high > span { background: var(--success); }
+.confidence-bar.is-mid > span { background: var(--warning); }
+.confidence-bar.is-low > span { background: var(--error); }
+
+/* Focus rings stay. Reinforce them for elements we author. */
+:focus-visible {
+  outline: 2px solid var(--accent-secondary);
+  outline-offset: 1px;
+}
+
+.keyboard-hint kbd {
+  font-family: var(--font-body);
+  font-size: 11px;
+  border: 1px solid var(--border-color);
+  border-bottom-width: 2px;
+  border-radius: var(--radius-sm);
+  padding: 0 4px;
+  background: var(--bg-surface-alt);
+  color: var(--text-secondary);
+}
+
+/* Confusion matrix — weight by opacity of one hue, never a rainbow ramp. */
+.confusion {
+  border-collapse: collapse;
+  width: 100%;
+}
+
+.confusion th,
+.confusion td {
+  border: 1px solid var(--border-color);
+  padding: 8px;
+  text-align: center;
+}
+
+.confusion th {
+  background: var(--bg-surface-alt);
+  color: var(--text-secondary);
+}
+
+.confusion-cell {
+  position: relative;
+  background: var(--bg-surface);
+}
+
+.confusion-cell.is-correct {
+  background: color-mix(in srgb, var(--success) calc(var(--weight, 0) * 22%), var(--bg-surface));
+}
+
+.confusion-cell.is-error {
+  background: color-mix(in srgb, var(--error) calc(var(--weight, 0) * 30%), var(--bg-surface));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}

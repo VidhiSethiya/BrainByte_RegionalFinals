@@ -1,43 +1,58 @@
 import { useQuery } from "@tanstack/react-query";
-import { Alert, Button, Card, Flex, Input, Table, Tag, Typography } from "antd";
+import { Alert, Button, Card, Empty, Flex, Input, Skeleton, Table, Tag, Tooltip, Typography } from "antd";
 import { useState } from "react";
 
 import { api, type ListParams } from "../api/client";
 
+/** Semantic, not decorative: red is a refusal or a denial, green is a completed action. */
 const ACTION_COLOR: Record<string, string> = {
-  "chat.blocked_input": "red",
-  "chat.blocked_output": "red",
-  "access.denied": "red",
-  "auth.failed": "orange",
-  "document.deleted": "orange",
-  "chat.answered": "green",
-  "document.indexed": "blue",
+  "chat.blocked_input": "error",
+  "chat.blocked_output": "error",
+  "access.denied": "error",
+  "auth.failed": "warning",
+  "document.deleted": "warning",
+  "ticket.overridden": "warning",
+  "chat.answered": "success",
+  "ticket.approved": "success",
+  "ticket.synced": "success",
+  "document.indexed": "processing",
+  "ticket.triaged": "processing",
 };
 
 export default function Audit() {
   const [params, setParams] = useState<ListParams>({ page: 1, page_size: 20 });
 
-  const { data, isFetching } = useQuery({
+  const { data, isFetching, error, refetch } = useQuery({
     queryKey: ["audit", params],
     queryFn: () => api.audit(params),
   });
 
   // The verification button is the demo: it proves the log has not been edited.
-  const { data: chain, refetch } = useQuery({
+  const chain = useQuery({
     queryKey: ["audit-verify"],
     queryFn: () => api.verifyAudit().then((r) => r.data),
   });
 
   return (
-    <Flex vertical gap={12}>
-      {chain && (
+    <Flex vertical gap={24}>
+      <Flex vertical gap={4}>
+        <h1 className="page-title">Audit Trail</h1>
+        <p className="page-subtitle">
+          Every decision, override, approval and refusal — in a hash chain that cannot be edited
+          after the fact.
+        </p>
+      </Flex>
+
+      {chain.isPending ? (
+        <Skeleton.Input active block style={{ height: 64 }} />
+      ) : chain.data ? (
         <Alert
-          type={chain.valid ? "success" : "error"}
+          type={chain.data.valid ? "success" : "error"}
           showIcon
           message={
-            chain.valid
-              ? `Hash chain intact across ${chain.entries} entries`
-              : `Chain broken at entry ${chain.broken_at} — the log has been tampered with`
+            chain.data.valid
+              ? `Hash chain intact across ${chain.data.entries.toLocaleString()} entries`
+              : `Chain broken at entry ${chain.data.broken_at} — the log has been tampered with`
           }
           description={
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>
@@ -46,53 +61,100 @@ export default function Audit() {
             </Typography.Text>
           }
           action={
-            <Button size="small" onClick={() => refetch()}>
+            <Button size="small" onClick={() => chain.refetch()} loading={chain.isFetching}>
               Re-verify
             </Button>
           }
         />
-      )}
+      ) : null}
 
       <Card size="small" title="Audit trail">
         <Input.Search
           allowClear
           placeholder="Search actions"
-          style={{ maxWidth: 280, marginBottom: 12 }}
+          style={{ maxWidth: 280, marginBottom: 16 }}
           onSearch={(q) => setParams((p) => ({ ...p, q, page: 1 }))}
         />
 
-        <Table
-          rowKey="id"
-          size="small"
-          loading={isFetching}
-          dataSource={data?.data ?? []}
-          scroll={{ x: true }}
-          expandable={{
-            expandedRowRender: (record: any) => (
-              <pre style={{ margin: 0, fontSize: 12 }}>{JSON.stringify(record.details, null, 2)}</pre>
-            ),
-          }}
-          pagination={{
-            current: data?.meta.page,
-            pageSize: data?.meta.page_size,
-            total: data?.meta.total,
-          }}
-          onChange={(pagination) =>
-            setParams((p) => ({ ...p, page: pagination.current, page_size: pagination.pageSize }))
-          }
-          columns={[
-            { title: "#", dataIndex: "id", width: 70 },
-            { title: "When", dataIndex: "created_at", render: (v: string) => v?.slice(0, 19).replace("T", " ") },
-            {
-              title: "Action",
-              dataIndex: "action",
-              render: (v: string) => <Tag color={ACTION_COLOR[v] ?? "default"}>{v}</Tag>,
-            },
-            { title: "User", dataIndex: "user_id", ellipsis: true },
-            { title: "Resource", dataIndex: "resource", ellipsis: true },
-            { title: "Hash", dataIndex: "entry_hash", ellipsis: true, render: (v: string) => v?.slice(0, 16) },
-          ]}
-        />
+        {error ? (
+          <Alert
+            type="error"
+            showIcon
+            message="Could not load the audit trail"
+            description={(error as Error).message}
+            action={
+              <Button size="small" onClick={() => refetch()}>
+                Retry
+              </Button>
+            }
+          />
+        ) : (
+          <Table
+            rowKey="id"
+            size="small"
+            loading={isFetching && !data}
+            dataSource={data?.data ?? []}
+            scroll={{ x: true }}
+            expandable={{
+              expandedRowRender: (record: any) => (
+                <pre className="data" style={{ margin: 0, fontSize: 12, whiteSpace: "pre-wrap" }}>
+                  {JSON.stringify(record.details, null, 2)}
+                </pre>
+              ),
+            }}
+            locale={{
+              emptyText: (
+                <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No audit entries match this search." />
+              ),
+            }}
+            pagination={{
+              current: data?.meta.page,
+              pageSize: data?.meta.page_size,
+              total: data?.meta.total,
+              showTotal: (total, range) => (
+                <span className="tabular">
+                  {range[0]}–{range[1]} of {total}
+                </span>
+              ),
+            }}
+            onChange={(pagination) =>
+              setParams((p) => ({ ...p, page: pagination.current, page_size: pagination.pageSize }))
+            }
+            columns={[
+              {
+                title: "#",
+                dataIndex: "id",
+                width: 70,
+                align: "right",
+                render: (v: number) => <span className="tabular">{v}</span>,
+              },
+              {
+                title: "When",
+                dataIndex: "created_at",
+                width: 170,
+                render: (v: string) => <span className="data">{v?.slice(0, 19).replace("T", " ")}</span>,
+              },
+              {
+                title: "Action",
+                dataIndex: "action",
+                width: 190,
+                render: (v: string) => <Tag color={ACTION_COLOR[v] ?? "default"}>{v}</Tag>,
+              },
+              { title: "User", dataIndex: "user_id", width: 120, ellipsis: true },
+              { title: "Resource", dataIndex: "resource", ellipsis: true },
+              {
+                title: "Entry hash",
+                dataIndex: "entry_hash",
+                width: 190,
+                render: (v: string) => (
+                  <Tooltip title={v}>
+                    <span className="data">{v?.slice(0, 16)}…</span>
+                  </Tooltip>
+                ),
+              },
+            ]}
+          />
+        )}
       </Card>
     </Flex>
   );

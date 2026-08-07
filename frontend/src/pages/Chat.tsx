@@ -1,9 +1,11 @@
 import { DislikeOutlined, LikeOutlined, SendOutlined } from "@ant-design/icons";
-import { App, Button, Card, Empty, Flex, Input, Space, Spin, Tag, Tooltip, Typography } from "antd";
+import { App, Button, Card, Empty, Flex, Input, Skeleton, Space, Tag, Tooltip, Typography } from "antd";
 import { useRef, useState } from "react";
 import Markdown from "react-markdown";
 
 import { api, type ChatResponse, type Citation } from "../api/client";
+import { GroundednessTag } from "../components/SeverityTag";
+import VoiceButton from "../components/VoiceButton";
 
 interface Turn {
   role: "user" | "assistant";
@@ -14,18 +16,15 @@ interface Turn {
   latencyMs?: number;
   tokens?: number;
   blocked?: boolean;
+  /** Set when the answer came from the deterministic SQL tool rather than the model. */
+  countedFromDatabase?: boolean;
 }
 
-/** Groundedness is the number judges look for — show it, don't bury it. */
-function GroundednessTag({ score }: { score?: number | null }) {
-  if (score === undefined || score === null) return null;
-  const color = score >= 0.75 ? "green" : score >= 0.5 ? "gold" : "red";
-  return (
-    <Tooltip title="Share of the answer's claims supported by the retrieved sources">
-      <Tag color={color}>grounded {(score * 100).toFixed(0)}%</Tag>
-    </Tooltip>
-  );
-}
+const STARTERS = [
+  "How many S1 tickets were raised this week?",
+  "Which team has the oldest open ticket?",
+  "What is the first action for an RDS failover loop?",
+];
 
 export default function Chat() {
   const { message: toast } = App.useApp();
@@ -60,20 +59,21 @@ export default function Chat() {
     }
   }
 
-  function applyResponse(data: ChatResponse) {
+  function applyResponse(data: ChatResponse & { tool_used?: string | null }) {
     setSessionId(data.session_id);
     setSuggestions(data.suggestions ?? []);
     setTurns((prev) => [
       ...prev,
       {
         role: "assistant",
-        content: data.answer,
+        content: data.blocked ? data.blocked_reason ?? data.answer : data.answer,
         citations: data.citations,
         messageId: data.message_id,
         groundedness: data.groundedness,
         latencyMs: data.latency_ms,
         tokens: data.total_tokens,
         blocked: data.blocked,
+        countedFromDatabase: data.tool_used === "ticket_stats",
       },
     ]);
   }
@@ -88,31 +88,62 @@ export default function Chat() {
   }
 
   return (
-    <Flex vertical gap={12} style={{ height: "calc(100vh - 104px)" }}>
+    <Flex vertical gap={16} style={{ height: "calc(100vh - 104px)" }}>
+      <Flex vertical gap={4}>
+        <h1 className="page-title">Assistant</h1>
+        <p className="page-subtitle">
+          Ask the ticket history and the runbooks. Every answer carries its sources.
+        </p>
+      </Flex>
+
       <Card styles={{ body: { flex: 1, overflowY: "auto" } }} style={{ flex: 1, overflow: "hidden" }}>
-        {turns.length === 0 && (
-          <Empty
-            description={
-              /* [PLACEHOLDER: EMPTY_STATE_COPY — name 2-3 real questions from the
-                 problem statement so a judge can click straight into a good demo] */
-              "Ask a question about the indexed corpus"
-            }
-          />
+        {turns.length === 0 && !pending && (
+          <Flex vertical gap={16} align="center" justify="center" style={{ height: "100%" }}>
+            <Empty
+              image={Empty.PRESENTED_IMAGE_SIMPLE}
+              description="Ask a question about the ticket history or the indexed runbooks."
+            />
+            <Space wrap>
+              {STARTERS.map((starter) => (
+                <Button key={starter} size="small" onClick={() => send(starter)}>
+                  {starter}
+                </Button>
+              ))}
+            </Space>
+          </Flex>
         )}
 
         <Flex vertical gap={16}>
           {turns.map((turn, index) => (
-            <div key={index} style={{ alignSelf: turn.role === "user" ? "flex-end" : "flex-start", maxWidth: "80%" }}>
-              <Card
-                size="small"
-                style={{
-                  background: turn.role === "user" ? "#e6f4ff" : turn.blocked ? "#fff2f0" : "#fafafa",
-                }}
+            <div
+              key={index}
+              style={{ alignSelf: turn.role === "user" ? "flex-end" : "flex-start", maxWidth: "80%" }}
+            >
+              <div
+                className={`bubble fade-in ${
+                  turn.role === "user" ? "bubble-user" : turn.blocked ? "bubble-blocked" : "bubble-assistant"
+                }`}
               >
-                <Markdown>{turn.content}</Markdown>
+                <div className="markdown-body">
+                  <Markdown>{turn.content}</Markdown>
+                </div>
+
+                {turn.role === "assistant" && turn.blocked && (
+                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                    Blocked before generation. Nothing was sent to the model and nothing was written.
+                  </Typography.Text>
+                )}
 
                 {turn.role === "assistant" && !turn.blocked && (
                   <>
+                    {turn.countedFromDatabase && (
+                      <Tooltip title="This number is a SQL aggregate over the ticket table — the model did not produce it.">
+                        <Tag color="processing" style={{ marginTop: 8 }}>
+                          Counted from the database, not generated
+                        </Tag>
+                      </Tooltip>
+                    )}
+
                     {!!turn.citations?.length && (
                       <Space size={4} wrap style={{ marginTop: 8 }}>
                         {turn.citations.map((citation) => (
@@ -126,26 +157,43 @@ export default function Chat() {
                       </Space>
                     )}
 
-                    <Flex align="center" gap={8} style={{ marginTop: 8 }}>
+                    <Flex align="center" gap={8} style={{ marginTop: 8 }} wrap>
                       <GroundednessTag score={turn.groundedness} />
-                      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                      <Typography.Text type="secondary" className="tabular" style={{ fontSize: 12 }}>
                         {turn.latencyMs}ms · {turn.tokens} tokens
                       </Typography.Text>
                       {turn.messageId && (
                         <Space size={0}>
-                          <Button type="text" size="small" icon={<LikeOutlined />}
-                                  onClick={() => rate(turn.messageId!, 1)} />
-                          <Button type="text" size="small" icon={<DislikeOutlined />}
-                                  onClick={() => rate(turn.messageId!, -1)} />
+                          <Button
+                            type="text"
+                            size="small"
+                            aria-label="Helpful"
+                            icon={<LikeOutlined />}
+                            onClick={() => rate(turn.messageId!, 1)}
+                          />
+                          <Button
+                            type="text"
+                            size="small"
+                            aria-label="Not helpful"
+                            icon={<DislikeOutlined />}
+                            onClick={() => rate(turn.messageId!, -1)}
+                          />
                         </Space>
                       )}
                     </Flex>
                   </>
                 )}
-              </Card>
+              </div>
             </div>
           ))}
-          {pending && <Spin style={{ alignSelf: "flex-start" }} />}
+
+          {pending && (
+            <div style={{ alignSelf: "flex-start", maxWidth: "80%", width: 320 }}>
+              <div className="bubble bubble-assistant">
+                <Skeleton active paragraph={{ rows: 2 }} title={false} />
+              </div>
+            </div>
+          )}
           <div ref={bottom} />
         </Flex>
       </Card>
@@ -153,14 +201,14 @@ export default function Chat() {
       {!!suggestions.length && (
         <Space wrap>
           {suggestions.map((suggestion) => (
-            <Tag key={suggestion} style={{ cursor: "pointer" }} onClick={() => send(suggestion)}>
+            <Button key={suggestion} size="small" onClick={() => send(suggestion)}>
               {suggestion}
-            </Tag>
+            </Button>
           ))}
         </Space>
       )}
 
-      <Space.Compact style={{ width: "100%" }}>
+      <Flex gap={8} align="flex-end">
         <Input.TextArea
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
@@ -174,10 +222,13 @@ export default function Chat() {
           placeholder="Ask a question…  (Shift+Enter for a new line)"
           maxLength={4000}
         />
+        {/* Read-only questions may run on release; the transcript still lands in the
+            field first so it can be edited. */}
+        <VoiceButton onTranscript={(text) => setDraft((current) => `${current} ${text}`.trim())} />
         <Button type="primary" icon={<SendOutlined />} loading={pending} onClick={() => send(draft)}>
           Send
         </Button>
-      </Space.Compact>
+      </Flex>
     </Flex>
   );
 }

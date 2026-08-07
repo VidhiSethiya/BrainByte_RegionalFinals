@@ -1,15 +1,35 @@
 import { InboxOutlined } from "@ant-design/icons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { App, Button, Card, Flex, Input, Popconfirm, Select, Table, Tag, Upload } from "antd";
+import {
+  Alert,
+  App,
+  Button,
+  Card,
+  Empty,
+  Flex,
+  Input,
+  Popconfirm,
+  Select,
+  Table,
+  Tag,
+  Upload,
+} from "antd";
 import { useState } from "react";
 
 import { api, type DocumentRow, type ListParams } from "../api/client";
 
+/** Semantic tokens, not raw AntD hues — restricted reads as risk, public as safe. */
 const SENSITIVITY_COLOR: Record<string, string> = {
-  public: "green",
-  internal: "blue",
-  confidential: "orange",
-  restricted: "red",
+  public: "success",
+  internal: "processing",
+  confidential: "warning",
+  restricted: "error",
+};
+
+const STATUS_COLOR: Record<string, string> = {
+  indexed: "success",
+  processing: "processing",
+  failed: "error",
 };
 
 export default function Documents() {
@@ -22,7 +42,7 @@ export default function Documents() {
   const [sensitivity, setSensitivity] = useState("internal");
   const [roles, setRoles] = useState<string[]>(["admin", "analyst"]);
 
-  const { data, isFetching } = useQuery({
+  const { data, isFetching, error, refetch } = useQuery({
     queryKey: ["documents", params],
     queryFn: () => api.documents(params),
   });
@@ -42,9 +62,17 @@ export default function Documents() {
   });
 
   return (
-    <Flex vertical gap={12}>
+    <Flex vertical gap={24}>
+      <Flex vertical gap={4}>
+        <h1 className="page-title">Knowledge Base</h1>
+        <p className="page-subtitle">
+          The runbooks and reference material every decision cites. PII is masked before anything
+          is embedded.
+        </p>
+      </Flex>
+
       <Card size="small" title="Add to the knowledge base">
-        <Flex gap={12} wrap align="center" style={{ marginBottom: 12 }}>
+        <Flex gap={12} wrap align="center" style={{ marginBottom: 16 }}>
           <Select
             value={sensitivity}
             onChange={setSensitivity}
@@ -79,7 +107,22 @@ export default function Documents() {
       </Card>
 
       <Card size="small" title="Indexed documents">
-        <Flex gap={8} style={{ marginBottom: 12 }}>
+        {error && (
+          <Alert
+            type="error"
+            showIcon
+            style={{ marginBottom: 16 }}
+            message="Could not load documents"
+            description={(error as Error).message}
+            action={
+              <Button size="small" onClick={() => refetch()}>
+                Retry
+              </Button>
+            }
+          />
+        )}
+
+        <Flex gap={8} style={{ marginBottom: 16 }}>
           <Input.Search
             allowClear
             placeholder="Search filenames"
@@ -101,11 +144,24 @@ export default function Documents() {
           loading={isFetching || upload.isPending}
           dataSource={data?.data ?? []}
           scroll={{ x: true }}
+          locale={{
+            emptyText: (
+              <Empty
+                image={Empty.PRESENTED_IMAGE_SIMPLE}
+                description="Nothing indexed yet. Drop a runbook above and decisions start citing it."
+              />
+            ),
+          }}
           pagination={{
             current: data?.meta.page,
             pageSize: data?.meta.page_size,
             total: data?.meta.total,
             showSizeChanger: true,
+            showTotal: (total, range) => (
+              <span className="tabular">
+                {range[0]}–{range[1]} of {total}
+              </span>
+            ),
           }}
           onChange={(pagination, _filters, sorter: any) =>
             setParams((p) => ({
@@ -129,8 +185,27 @@ export default function Documents() {
               dataIndex: "allowed_roles",
               render: (roles: string[]) => roles.map((r) => <Tag key={r}>{r}</Tag>),
             },
-            { title: "Chunks", dataIndex: "chunk_count", sorter: true },
-            { title: "Indexed", dataIndex: "created_at", sorter: true, render: (v: string) => v?.slice(0, 19).replace("T", " ") },
+            {
+              title: "Status",
+              dataIndex: "status",
+              width: 120,
+              render: (v: string) => <Tag color={STATUS_COLOR[v] ?? "default"}>{v}</Tag>,
+            },
+            {
+              title: "Chunks",
+              dataIndex: "chunk_count",
+              align: "right",
+              width: 100,
+              sorter: true,
+              render: (v: number) => <span className="tabular">{v}</span>,
+            },
+            {
+              title: "Indexed",
+              dataIndex: "created_at",
+              width: 170,
+              sorter: true,
+              render: (v: string) => <span className="data">{v?.slice(0, 19).replace("T", " ")}</span>,
+            },
             {
               title: "",
               render: (_: unknown, row: DocumentRow) => (

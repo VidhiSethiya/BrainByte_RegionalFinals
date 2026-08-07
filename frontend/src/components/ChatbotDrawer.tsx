@@ -1,15 +1,33 @@
 import { MessageOutlined, ReloadOutlined, SendOutlined } from "@ant-design/icons";
-import { App, Button, Drawer, Empty, Flex, FloatButton, Input, Space, Spin, Tag, Tooltip } from "antd";
+import {
+  App,
+  Button,
+  Drawer,
+  Empty,
+  Flex,
+  FloatButton,
+  Input,
+  Skeleton,
+  Space,
+  Tag,
+  Tooltip,
+  Typography,
+} from "antd";
 import { useEffect, useRef, useState } from "react";
 import Markdown from "react-markdown";
 
 import { api, type Citation } from "../api/client";
+import { GroundednessTag } from "./SeverityTag";
+import VoiceButton from "./VoiceButton";
 
 interface Turn {
   role: "user" | "assistant";
   content: string;
   citations?: Citation[];
   blocked?: boolean;
+  groundedness?: number | null;
+  /** True when the number came from the SQL tool rather than the model. */
+  countedFromDatabase?: boolean;
 }
 
 /**
@@ -58,9 +76,11 @@ export default function ChatbotDrawer() {
         ...prev,
         {
           role: "assistant",
-          content: data.answer,
+          content: data.blocked ? data.blocked_reason ?? data.answer : data.answer,
           citations: data.citations,
           blocked: data.blocked,
+          groundedness: data.groundedness,
+          countedFromDatabase: (data as { tool_used?: string | null }).tool_used === "ticket_stats",
         },
       ]);
     } catch (error: any) {
@@ -90,42 +110,79 @@ export default function ChatbotDrawer() {
             <Button size="small" icon={<ReloadOutlined />} onClick={reset} />
           </Tooltip>
         }
-        styles={{ body: { display: "flex", flexDirection: "column", gap: 12 } }}
+        styles={{ body: { display: "flex", flexDirection: "column", gap: 12 }, wrapper: { boxShadow: "var(--shadow-float)" } }}
       >
         <div style={{ flex: 1, overflowY: "auto" }}>
-          {turns.length === 0 && <Empty description="Ask anything about the indexed documents" />}
+          {turns.length === 0 && !pending && (
+            <Empty
+              image={Empty.PRESENTED_IMAGE_SIMPLE}
+              description="Ask anything about the indexed runbooks and ticket history."
+            />
+          )}
 
           <Flex vertical gap={12}>
             {turns.map((turn, index) => (
               <div
                 key={index}
-                style={{
-                  alignSelf: turn.role === "user" ? "flex-end" : "flex-start",
-                  maxWidth: "90%",
-                  padding: "8px 12px",
-                  borderRadius: 8,
-                  background:
-                    turn.role === "user" ? "#e6f4ff" : turn.blocked ? "#fff2f0" : "#fafafa",
-                }}
+                style={{ alignSelf: turn.role === "user" ? "flex-end" : "flex-start", maxWidth: "90%" }}
               >
-                <Markdown>{turn.content}</Markdown>
-                {!!turn.citations?.length && (
-                  <Space size={4} wrap style={{ marginTop: 6 }}>
-                    {turn.citations.map((citation) => (
-                      <Tooltip key={citation.label} title={citation.snippet}>
-                        <Tag>{citation.filename}</Tag>
-                      </Tooltip>
-                    ))}
-                  </Space>
-                )}
+                <div
+                  className={`bubble fade-in ${
+                    turn.role === "user"
+                      ? "bubble-user"
+                      : turn.blocked
+                        ? "bubble-blocked"
+                        : "bubble-assistant"
+                  }`}
+                >
+                  <div className="markdown-body">
+                    <Markdown>{turn.content}</Markdown>
+                  </div>
+
+                  {turn.role === "assistant" && turn.blocked && (
+                    <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                      Blocked before generation. Nothing was sent to the model.
+                    </Typography.Text>
+                  )}
+
+                  {turn.countedFromDatabase && (
+                    <Tooltip title="This number is a SQL aggregate over the ticket table — the model did not produce it.">
+                      <Tag color="processing" style={{ marginTop: 8 }}>
+                        Counted from the database, not generated
+                      </Tag>
+                    </Tooltip>
+                  )}
+
+                  {!!turn.citations?.length && (
+                    <Space size={4} wrap style={{ marginTop: 8 }}>
+                      {turn.citations.map((citation) => (
+                        <Tooltip key={citation.label} title={citation.snippet}>
+                          <Tag>
+                            {citation.label} · {citation.filename}
+                          </Tag>
+                        </Tooltip>
+                      ))}
+                    </Space>
+                  )}
+
+                  {turn.role === "assistant" && !turn.blocked && turn.groundedness !== undefined && (
+                    <Flex style={{ marginTop: 8 }}>
+                      <GroundednessTag score={turn.groundedness} />
+                    </Flex>
+                  )}
+                </div>
               </div>
             ))}
-            {pending && <Spin style={{ alignSelf: "flex-start" }} />}
+            {pending && (
+              <div className="bubble bubble-assistant" style={{ alignSelf: "flex-start", width: 240 }}>
+                <Skeleton active paragraph={{ rows: 2 }} title={false} />
+              </div>
+            )}
             <div ref={bottom} />
           </Flex>
         </div>
 
-        <Space.Compact style={{ width: "100%" }}>
+        <Flex gap={8}>
           <Input
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
@@ -133,8 +190,10 @@ export default function ChatbotDrawer() {
             placeholder="Ask a question…"
             maxLength={4000}
           />
-          <Button type="primary" icon={<SendOutlined />} loading={pending} onClick={send} />
-        </Space.Compact>
+          {/* Transcript lands in the field, editable — sending is still a deliberate act. */}
+          <VoiceButton onTranscript={(text) => setDraft((current) => `${current} ${text}`.trim())} />
+          <Button type="primary" icon={<SendOutlined />} loading={pending} onClick={send} aria-label="Send" />
+        </Flex>
       </Drawer>
     </>
   );

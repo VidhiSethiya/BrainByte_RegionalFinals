@@ -18,5 +18,17 @@ export default defineConfig({
   build: {
     // Flask serves this directory in production — also same-origin, no proxy needed.
     outDir: "dist",
+    rollupOptions: {
+      output: {
+        // Split the three heavy vendors out of the app chunk. They change far less
+        // often than the app does, so they stay cached across deploys instead of
+        // being re-downloaded with every UI tweak.
+        manualChunks: {
+          antd: ["antd", "@ant-design/icons"],
+          charts: ["recharts"],
+          markdown: ["react-markdown"],
+        },
+      },
+    },
   },
 });
