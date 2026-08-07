@@ -8,10 +8,10 @@
   "channel": "synthetic",
   "team": "gcp",
   "category": "deployment",
-  "severity": "S4",
+  "severity": "Low",
   "resolved": false,
   "resolution_minutes": null,
   "true_category": "deployment",
-  "true_severity": "S4",
+  "true_severity": "Low",
   "true_team": "gcp"
 }

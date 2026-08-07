@@ -273,9 +273,9 @@ answer.
    classify → assess → route → reflect → verify → gate → sync. Handoffs are validated
    typed objects, never prose, and both retry loops are capped at one so no unbounded
    loop is reachable.
-8. **The LLM never counts** — aggregate questions ("how many S1 this week") are answered
+8. **The LLM never counts** — aggregate questions ("how many Highest this week") are answered
    by a deterministic SQL tool and only narrated by the model
-9. **Nothing acts without a human** — S1 and low-confidence decisions are gated for
+9. **Nothing acts without a human** — Highest Priority and low-confidence decisions are gated for
    approval, the only write tool refuses unapproved decisions, and the system recommends
    a first action but never executes one
 

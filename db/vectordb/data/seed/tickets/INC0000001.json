@@ -8,10 +8,10 @@
   "channel": "synthetic",
   "team": "ops",
   "category": "availability",
-  "severity": "S1",
+  "severity": "Highest",
   "resolved": false,
   "resolution_minutes": null,
   "true_category": "availability",
-  "true_severity": "S1",
+  "true_severity": "Highest",
   "true_team": "ops"
 }

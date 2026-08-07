@@ -213,7 +213,60 @@ Jira issue created/updated
 
 **Complete.** JIRA-1 … JIRA-7 all DONE (including FIX-A…D residuals).
 
+## Phase FE-JIRA — Frontend ↔ live Jira demo path
+
+- [x] **FE-JIRA-1**: Adapt client.ts create/detail/sync types to live backend envelopes
+  - **Files**: `frontend/src/api/client.ts`
+  - **Acceptance Criteria**: `createTicket` sends `body`; `ticket(id)` maps `{ticket,runs}`→decision; `syncNow` returns pulled/triaged/failed/watermark; TicketRow softens optional SLA
+  - **Status**: DONE
+
+- [x] **FE-JIRA-2**: Control Sync Now + awaiting_approval queue surfacing SCRUM external_id
+  - **Files**: `frontend/src/pages/Control.tsx`
+  - **Acceptance Criteria**: Sync Now calls `api.syncNow()` with long-running toast; approval list `filter[status]=awaiting_approval`; external_id + source visible
+  - **Status**: DONE
+
+- [x] **FE-JIRA-3**: DecisionDrawer map runs→decision; handle 409; degrade retriage/timeline
+  - **Files**: `frontend/src/components/DecisionDrawer.tsx`
+  - **Acceptance Criteria**: Adapted detail; 409 not_ready message; Re-triage hidden; timeline empty→ticket fields only
+  - **Status**: DONE
+
+- [x] **FE-JIRA-4**: Harden Queue/History/Triage/TicketTable for real Ticket.to_dict
+  - **Files**: `frontend/src/pages/Queue.tsx`, `History.tsx`, `Triage.tsx`, `TicketTable.tsx`
+  - **Acceptance Criteria**: Engineers skip analytics 403; History uses status/q not from/to; TicketTable shows source/severity/team/status/external_id; Bulk tab unavailable; GraphRunner tolerates empty nodes
+  - **Status**: DONE
+
+- [x] **FE-JIRA-5**: Smoke Sync → Approve → Jira write-back + ACL queue check
+  - **Files**: (verify by running app)
+  - **Acceptance Criteria**: manager Sync; awaiting_approval SCRUM-*; Approve→routed + Jira comment; ops1 scoped queue; engineer Queue no analytics 403
+  - **Status**: DONE
+  - **Verifier (2026-08-07):** PASS — Sync pulled=2/triaged=2; Approve SCRUM-5→Jira comment `S1 · Priority Highest · azure`; engineer analytics 403; ops1 queue foreign-team=0
+
+## Phase PRIORITY — Jira Priority names (unify urgency vocabulary)
+
+- [x] **TASK-PRIORITY-1**: Backend schemas/prompts/gates/jira identity write-back + legacy normalize
+  - **Files**: `backend/rag/schemas.py`, `ai/prompts.py`, `ai/agents.py`, `ai/tools.py`, `integrations/jira.py`, `api.py`, `observability/evals.py`, `db/sqlite/models.py`
+  - **Acceptance Criteria**: Severity Literal is Highest|High|Medium|Low; gate on Highest; auto-approve Medium/Low; comments use single Priority name
+  - **Status**: DONE
+
+- [x] **TASK-PRIORITY-2**: Frontend types, tags, pages, mocks — UI says Priority
+  - **Files**: `frontend/src/api/client.ts`, `SeverityTag.tsx`, Control/Queue/History/Evals/DecisionDrawer/TicketTable/mocks
+  - **Acceptance Criteria**: No S1–S4 in UI options; columns/dispute use Priority
+  - **Status**: DONE
+
+- [x] **TASK-PRIORITY-3**: Seed SLA + tickets + pitch docs
+  - **Files**: `db/vectordb/data/seed/**`, `docs/JUDGES_QA.md`, `docs/FLOW.md`
+  - **Acceptance Criteria**: SLA table uses Highest–Low; seed true_severity uses Jira names
+  - **Status**: DONE
+
+- [x] **TASK-PRIORITY-4**: Smoke approve write-back uses same Jira Priority name
+  - **Files**: (verify by running app)
+  - **Acceptance Criteria**: TicketSphere decision Highest → Jira Priority Highest; comment has no S#
+  - **Status**: DONE
+  - **Verifier (2026-08-07):** PASS — SQLite migrated 27 rows; queue shows Highest; Approve SCRUM-5→`routed`/`Highest`; analytics by_severity uses Highest/High/Medium/Low
+
 ### Handoff order (updated)
 
 1. ~~Phase J~~ DONE  
-2. Orchestrator: next blueprint phase (outside JIRA-7)  
+2. ~~Phase FE-JIRA~~ DONE  
+3. ~~Phase PRIORITY~~ DONE  
+4. Orchestrator: next blueprint phase (outside JIRA-7)  

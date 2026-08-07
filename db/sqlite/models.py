@@ -265,7 +265,7 @@ class Ticket(Base):
     assignee = Column(String, default="")
     category = Column(String, default="")
     subcategory = Column(String, default="")
-    severity = Column(String, default="")  # S1–S4
+    severity = Column(String, default="")  # Jira Priority names: Highest|High|Medium|Low
     priority_score = Column(Integer, default=0)
     assigned_team = Column(String, default="")  # ops | azure | aws | gcp
     status = Column(String, default="new", index=True)
@@ -285,6 +285,8 @@ class Ticket(Base):
     updated_at = Column(DateTime, default=_now, onupdate=_now)
 
     def to_dict(self) -> dict:
+        from rag.schemas import normalize_severity
+
         return {
             "id": self.id,
             "external_id": self.external_id,
@@ -298,7 +300,7 @@ class Ticket(Base):
             "assignee": self.assignee,
             "category": self.category,
             "subcategory": self.subcategory,
-            "severity": self.severity,
+            "severity": normalize_severity(self.severity) if self.severity else "",
             "priority_score": self.priority_score,
             "assigned_team": self.assigned_team,
             "status": self.status,
@@ -307,7 +309,7 @@ class Ticket(Base):
             "overridden_by": self.overridden_by,
             "override_reason": self.override_reason,
             "true_category": self.true_category,
-            "true_severity": self.true_severity,
+            "true_severity": normalize_severity(self.true_severity) if self.true_severity else self.true_severity,
             "true_team": self.true_team,
             "held_out": self.held_out,
             "sync_attempts": self.sync_attempts,

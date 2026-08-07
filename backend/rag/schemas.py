@@ -28,9 +28,30 @@ DocType = Literal[
     "escalation_matrix",
 ]
 Team = Literal["ops", "azure", "aws", "gcp"]
-Severity = Literal["S1", "S2", "S3", "S4"]
+# Same vocabulary as Jira native Priority (stock Software board groups).
+Severity = Literal["Highest", "High", "Medium", "Low"]
 Environment = Literal["prod", "uat", "dev"]
 TicketSource = Literal["jira", "synthetic", "manual"]
+
+_LEGACY_SEVERITY = {"S1": "Highest", "S2": "High", "S3": "Medium", "S4": "Low"}
+_PRIORITY_NAMES = frozenset({"Highest", "High", "Medium", "Low"})
+
+
+def normalize_severity(value: str | None) -> str:
+    """Map legacy S1–S4 (and case variants) onto Jira Priority names."""
+    if not value:
+        return ""
+    raw = str(value).strip()
+    if raw in _PRIORITY_NAMES:
+        return raw
+    upper = raw.upper()
+    if upper in _LEGACY_SEVERITY:
+        return _LEGACY_SEVERITY[upper]
+    # Case-insensitive match for Highest/High/Medium/Low
+    for name in _PRIORITY_NAMES:
+        if name.lower() == raw.lower():
+            return name
+    return raw
 
 
 class RAGDocument(BaseModel):
@@ -184,8 +205,15 @@ class TriageDecision(BaseModel):
     ticket_id: str
     category: str = ""
     subcategory: str = ""
-    severity: Severity = "S3"
+    severity: Severity = "Medium"
     priority_score: int = Field(default=50, ge=0, le=100)
+
+    @field_validator("severity", mode="before")
+    @classmethod
+    def _norm_severity(cls, v: object) -> object:
+        if v is None or v == "":
+            return "Medium"
+        return normalize_severity(str(v)) or "Medium"
     assigned_team: Team = "ops"
     sla_target_mins: int = 0
     confidence: float = Field(default=0.0, ge=0.0, le=1.0)
@@ -235,13 +263,20 @@ class TriageVerdict(BaseModel):
 
 
 class SeverityVerdict(BaseModel):
-    """LLM JSON: severity + priority grounded in SLA / precedent."""
+    """LLM JSON: Priority (Jira names) grounded in SLA / precedent."""
 
     severity: Severity
     priority_score: int = Field(ge=0, le=100)
     sla_target_mins: int = 0
     confidence: float = Field(default=0.0, ge=0.0, le=1.0)
     rationale: str = ""
+
+    @field_validator("severity", mode="before")
+    @classmethod
+    def _norm_severity(cls, v: object) -> object:
+        if v is None or v == "":
+            return "Medium"
+        return normalize_severity(str(v)) or "Medium"
 
 
 class RoutingVerdict(BaseModel):

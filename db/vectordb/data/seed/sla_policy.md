@@ -1,8 +1,10 @@
 # SLA matrix
 
-| Severity | Respond (mins) | Resolve (mins) |
+Priority uses the same names as Jira native Priority.
+
+| Priority | Respond (mins) | Resolve (mins) |
 |---|---|---|
-| S1 | 15 | 240 |
-| S2 | 30 | 480 |
-| S3 | 120 | 1440 |
-| S4 | 480 | 4320 |
+| Highest | 15 | 240 |
+| High | 30 | 480 |
+| Medium | 120 | 1440 |
+| Low | 480 | 4320 |
