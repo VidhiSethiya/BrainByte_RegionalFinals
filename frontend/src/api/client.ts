@@ -78,7 +78,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<{ data:
   if (!response.ok) {
     if (response.status === 401) {
       auth.clear();
-      if (!location.pathname.startsWith("/login") && !location.pathname.startsWith("/manager/login")) {
+      if (!location.pathname.startsWith("/login")) {
         location.href = "/login";
       }
     }

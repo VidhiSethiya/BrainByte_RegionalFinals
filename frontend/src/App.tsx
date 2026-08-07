@@ -56,8 +56,8 @@ function ManagerOnly({ children }: { children: React.ReactNode }) {
 export default function App() {
   return (
     <Routes>
-      <Route path="/login" element={<Login mode="team" />} />
-      <Route path="/manager/login" element={<Login mode="manager" />} />
+      <Route path="/login" element={<Login />} />
+      <Route path="/manager/login" element={<Navigate to="/login" replace />} />
       <Route
         path="/"
         element={
