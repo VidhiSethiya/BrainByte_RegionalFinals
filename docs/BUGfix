@@ -1,0 +1,17 @@
+BUG- 1 - In the my "queue section" for manager remove second "priority" which reflects numbers like 82, 80, 80.. and remove this source column. make sure the SLA hours or data is reflected correctly in the column. make sure that all the values in the front end dashboard sync correctly with the backend. remove triage section
+
+
+BUG 2 - TEAM layer, ops, aws, azure and gcp should show status as either assigned/open/closed.  remove second "priority" which reflects numbers like 82, 80, 80.. remove source column, make sure the SLA hours or data is reflected correctly in the column. these teams should not have option to accept decision, reassign and dispute, only manager has to do it. remove triage section
+
+BUG 3 - remove synthetic keyword from when we open the incident
+
+
+BUG 4 - remove synthetic from everywhere its hardcoded, take only real values from backend.
+
+BUG 5 - remove resolution from TEAM layer, ops, aws, azure and gcp  history
+
+BUG 6 - remove assistant section from manager layer
+
+BUG - 7 remove bulk section from triage section in manager layer
+
+BUG 8 - fix SLA left time, get start time from jira and calculate sla left and show on dashboard
