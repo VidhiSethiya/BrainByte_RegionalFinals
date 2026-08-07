@@ -37,6 +37,7 @@ import {
   TEAM_OPTIONS,
 } from "../components/SeverityTag";
 import TicketTable from "../components/TicketTable";
+import { listPagination } from "../components/uiPagination";
 import { isManagerRole } from "../layouts/AppLayout";
 import { useUiStore } from "../store/ui";
 
@@ -260,6 +261,7 @@ export default function History() {
         {similar.data && (
           <List
             dataSource={similar.data}
+            pagination={listPagination}
             locale={{
               emptyText: (
                 <Empty

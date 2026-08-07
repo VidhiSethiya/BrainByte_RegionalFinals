@@ -68,6 +68,7 @@ import SeverityTag, {
   TeamTag,
 } from "../components/SeverityTag";
 import StatTile from "../components/StatTile";
+import { FETCH_ALL_PAGE_SIZE, uiPagination } from "../components/uiPagination";
 import { useUiStore } from "../store/ui";
 
 type WindowDays = "7" | "30" | "all";
@@ -148,7 +149,7 @@ export default function Control() {
     if (filters.category) filter.category = filters.category;
     return {
       page: 1,
-      page_size: 50,
+      page_size: FETCH_ALL_PAGE_SIZE,
       sort: "priority_score",
       order: "desc" as const,
       filter,
@@ -517,7 +518,7 @@ export default function Control() {
           loading={approvals.isFetching && !approvals.data}
           dataSource={approvalRows}
           scroll={{ x: true }}
-          pagination={false}
+          pagination={uiPagination}
           locale={{
             emptyText: (
               <Empty
@@ -610,10 +611,10 @@ export default function Control() {
             rowKey="ticket_id"
             size="small"
             loading={loading}
-            dataSource={(data?.recent_overrides ?? [])
-              .filter((row) => !filters.severity || row.from === filters.severity || row.to === filters.severity)
-              .slice(0, 10)}
-            pagination={false}
+            dataSource={(data?.recent_overrides ?? []).filter(
+              (row) => !filters.severity || row.from === filters.severity || row.to === filters.severity
+            )}
+            pagination={uiPagination}
             scroll={{ x: true }}
             locale={{
               emptyText: (

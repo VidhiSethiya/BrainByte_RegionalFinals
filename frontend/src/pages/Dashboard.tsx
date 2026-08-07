@@ -1,39 +1,15 @@
 import { ReloadOutlined } from "@ant-design/icons";
 import { useQuery } from "@tanstack/react-query";
-import { Alert, Button, Card, Col, Empty, Flex, Row, Skeleton, Table, Tag } from "antd";
-import {
-  CartesianGrid,
-  Legend,
-  Line,
-  LineChart,
-  ResponsiveContainer,
-  Tooltip as ReTooltip,
-  XAxis,
-  YAxis,
-} from "recharts";
+import { Alert, Button, Card, Col, Empty, Flex, Row, Table, Tag } from "antd";
 
 import { api } from "../api/client";
-import {
-  CHART_HEIGHT,
-  GRID,
-  SERIES,
-  animationFor,
-  axisProps,
-  legendProps,
-  tooltipProps,
-} from "../components/chartTheme";
 import StatTile from "../components/StatTile";
+import { uiPagination } from "../components/uiPagination";
 
 export default function Dashboard() {
   const usage = useQuery({
     queryKey: ["usage"],
     queryFn: () => api.usage().then((r) => r.data),
-    refetchInterval: 10_000,
-  });
-
-  const metrics = useQuery({
-    queryKey: ["message-metrics"],
-    queryFn: () => api.messageMetrics().then((r) => r.data),
     refetchInterval: 10_000,
   });
 
@@ -43,17 +19,8 @@ export default function Dashboard() {
     refetchInterval: 10_000,
   });
 
-  const series = (metrics.data ?? []).map((m: any, index: number) => ({
-    turn: index + 1,
-    latency: m.latency_ms,
-    grounded: m.groundedness !== null ? Math.round(m.groundedness * 100) : null,
-    tokens: (m.prompt_tokens ?? 0) + (m.completion_tokens ?? 0),
-  }));
-
   const tiles = [
     { label: "Requests", value: usage.data?.requests },
-    { label: "Avg latency", value: usage.data?.avg_latency_ms, suffix: "ms" },
-    { label: "p95 latency", value: usage.data?.p95_latency_ms, suffix: "ms" },
     { label: "Tokens used", value: usage.data?.total_tokens?.toLocaleString?.() },
     { label: "Indexed chunks", value: usage.data?.chunks?.toLocaleString?.() },
     {
@@ -68,15 +35,14 @@ export default function Dashboard() {
     <Flex vertical gap={24}>
       <Flex align="flex-end" justify="space-between" gap={16} wrap>
         <Flex vertical gap={4}>
-          <h1 className="page-title">Dashboard</h1>
-          <p className="page-subtitle">Platform health: throughput, latency, groundedness and cost.</p>
+          <h1 className="page-title">Usage</h1>
+          <p className="page-subtitle">Platform usage: throughput, tokens, index size and errors.</p>
         </Flex>
         <Button
           icon={<ReloadOutlined />}
           loading={usage.isFetching}
           onClick={() => {
             usage.refetch();
-            metrics.refetch();
             traces.refetch();
           }}
         >
@@ -100,7 +66,7 @@ export default function Dashboard() {
 
       <Row gutter={[16, 16]}>
         {tiles.map((tile) => (
-          <Col xs={12} md={8} xl={4} key={tile.label}>
+          <Col xs={12} md={12} xl={6} key={tile.label}>
             <StatTile
               label={tile.label}
               value={tile.value ?? null}
@@ -111,46 +77,6 @@ export default function Dashboard() {
           </Col>
         ))}
       </Row>
-
-      <Card size="small" title="Latency and groundedness per turn" className="chart-card">
-        {metrics.isPending ? (
-          <Skeleton active paragraph={{ rows: 5 }} />
-        ) : series.length === 0 ? (
-          <Empty
-            image={Empty.PRESENTED_IMAGE_SIMPLE}
-            description="No answered turns yet. Ask something on the Assistant page."
-          />
-        ) : (
-          <ResponsiveContainer width="100%" height={CHART_HEIGHT}>
-            <LineChart data={series}>
-              <CartesianGrid stroke={GRID} strokeDasharray="3 3" />
-              <XAxis dataKey="turn" {...axisProps} />
-              <YAxis yAxisId="left" {...axisProps} />
-              <YAxis yAxisId="right" orientation="right" domain={[0, 100]} {...axisProps} />
-              <ReTooltip {...tooltipProps} />
-              <Legend {...legendProps} />
-              <Line
-                yAxisId="left"
-                dataKey="latency"
-                name="latency (ms)"
-                stroke={SERIES[0]}
-                dot={false}
-                strokeWidth={2}
-                {...animationFor(0)}
-              />
-              <Line
-                yAxisId="right"
-                dataKey="grounded"
-                name="grounded (%)"
-                stroke={SERIES[1]}
-                dot={false}
-                strokeWidth={2}
-                {...animationFor(1)}
-              />
-            </LineChart>
-          </ResponsiveContainer>
-        )}
-      </Card>
 
       <Card size="small" title="Recent traces">
         {traces.error ? (
@@ -171,7 +97,7 @@ export default function Dashboard() {
             rowKey="id"
             loading={traces.isFetching && !traces.data}
             dataSource={traces.data?.data ?? []}
-            pagination={false}
+            pagination={uiPagination}
             scroll={{ x: true }}
             locale={{
               emptyText: (

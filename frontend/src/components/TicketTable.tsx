@@ -2,13 +2,12 @@
  * The one ticket table. Queue and History both render this — the columns differ by
  * a prop, not by a second file.
  *
- * Server-side by construction: it renders exactly the page it was handed and reports
- * paging/sorting back to the caller. There is no `dataSource={allRows}` path here,
- * because the moment one exists the app quietly stops being correct at 10,000 rows.
+ * UI pagination: pages the rows already loaded in `page.data`. Callers fetch a
+ * large page from the API; this table only sorts server-side and paginates client-side.
  */
 
 import { Alert, Empty, Table, Tooltip, Typography } from "antd";
-import type { ColumnsType, TablePaginationConfig } from "antd/es/table";
+import type { ColumnsType } from "antd/es/table";
 import type { SorterResult } from "antd/es/table/interface";
 import type { ReactNode } from "react";
 
@@ -20,6 +19,7 @@ import SeverityTag, {
   StatusTag,
   TeamTag,
 } from "./SeverityTag";
+import { FETCH_ALL_PAGE_SIZE, uiPagination } from "./uiPagination";
 
 export interface TableChange {
   page: number;
@@ -218,18 +218,6 @@ export default function TicketTable({
       : []),
   ];
 
-  const pagination: TablePaginationConfig = {
-    current: page?.meta.page ?? 1,
-    pageSize: page?.meta.page_size ?? 10,
-    total: page?.meta.total ?? 0,
-    showSizeChanger: true,
-    showTotal: (total, range) => (
-      <span className="tabular">
-        {range[0]}–{range[1]} of {total}
-      </span>
-    ),
-  };
-
   return (
     <Table<TicketRow>
       rowKey="id"
@@ -237,7 +225,7 @@ export default function TicketTable({
       loading={loading}
       dataSource={page?.data ?? []}
       columns={columns}
-      pagination={pagination}
+      pagination={uiPagination}
       scroll={{ x: true }}
       sticky
       footer={footer}
@@ -259,13 +247,15 @@ export default function TicketTable({
         style: { cursor: "pointer" },
         "aria-label": `${row.external_id} — ${row.title}`,
       })}
-      onChange={(paginationConfig, _filters, sorter) => {
+      onChange={(_paginationConfig, _filters, sorter) => {
         const single = Array.isArray(sorter) ? sorter[0] : (sorter as SorterResult<TicketRow>);
+        // Client-side paging only — sort still goes to the API.
+        if (!single?.field || single.order === undefined) return;
         onChange({
-          page: paginationConfig.current ?? 1,
-          page_size: paginationConfig.pageSize ?? 10,
-          sort: (single?.field as string) ?? sort,
-          order: single?.order === "ascend" ? "asc" : "desc",
+          page: 1,
+          page_size: FETCH_ALL_PAGE_SIZE,
+          sort: (single.field as string) ?? sort,
+          order: single.order === "ascend" ? "asc" : "desc",
         });
       }}
     />

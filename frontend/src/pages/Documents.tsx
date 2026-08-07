@@ -17,6 +17,7 @@ import {
 import { useState } from "react";
 
 import { api, type DocumentRow, type ListParams } from "../api/client";
+import { FETCH_ALL_PAGE_SIZE, uiPagination } from "../components/uiPagination";
 
 /** Semantic tokens, not raw AntD hues — restricted reads as risk, public as safe. */
 const SENSITIVITY_COLOR: Record<string, string> = {
@@ -36,9 +37,13 @@ export default function Documents() {
   const { message: toast } = App.useApp();
   const queryClient = useQueryClient();
 
-  // Server-side table state — the backend does the paging/sorting/filtering, so this
-  // stays correct at any corpus size.
-  const [params, setParams] = useState<ListParams>({ page: 1, page_size: 10, sort: "created_at", order: "desc" });
+  // Load a large page once; Ant Design paginates client-side in the table.
+  const [params, setParams] = useState<ListParams>({
+    page: 1,
+    page_size: FETCH_ALL_PAGE_SIZE,
+    sort: "created_at",
+    order: "desc",
+  });
   const [sensitivity, setSensitivity] = useState("internal");
   const [roles, setRoles] = useState<string[]>(["admin", "analyst"]);
 
@@ -152,26 +157,17 @@ export default function Documents() {
               />
             ),
           }}
-          pagination={{
-            current: data?.meta.page,
-            pageSize: data?.meta.page_size,
-            total: data?.meta.total,
-            showSizeChanger: true,
-            showTotal: (total, range) => (
-              <span className="tabular">
-                {range[0]}–{range[1]} of {total}
-              </span>
-            ),
-          }}
-          onChange={(pagination, _filters, sorter: any) =>
+          pagination={uiPagination}
+          onChange={(_pagination, _filters, sorter: any) => {
+            if (!sorter?.field || sorter?.order === undefined) return;
             setParams((p) => ({
               ...p,
-              page: pagination.current,
-              page_size: pagination.pageSize,
-              sort: sorter?.field ?? p.sort,
-              order: sorter?.order === "ascend" ? "asc" : "desc",
-            }))
-          }
+              page: 1,
+              page_size: FETCH_ALL_PAGE_SIZE,
+              sort: sorter.field ?? p.sort,
+              order: sorter.order === "ascend" ? "asc" : "desc",
+            }));
+          }}
           columns={[
             { title: "File", dataIndex: "filename", sorter: true },
             { title: "Type", dataIndex: "modality", render: (v: string) => <Tag>{v}</Tag> },
