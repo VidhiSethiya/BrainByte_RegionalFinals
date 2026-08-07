@@ -207,6 +207,10 @@ export interface TicketRow {
   override_reason: string | null;
   last_error?: string | null;
   sync_attempts?: number;
+  /** From latest TriageRun — why the gate held the ticket (Control Tower). */
+  escalation_reason?: string | null;
+  confidence_limited_by?: string | null;
+  confidence_gates?: Record<string, number> | null;
   created_at: string;
   updated_at?: string | null;
   resolved_at?: string | null;
@@ -602,6 +606,11 @@ export const api = {
     patch<TicketRow>(`/tickets/${id}/override`, body),
 
   approve: (id: string) => post<TicketRow>(`/tickets/${id}/approve`),
+
+  recalculateConfidence: () =>
+    post<{ updated: number; failed: number; errors: { ticket_id: string; error: string }[] }>(
+      "/analytics/recalculate-confidence"
+    ),
 
   teamQueue: (params?: TicketListParams) => list<TicketRow>("/teams/queue", params),
 

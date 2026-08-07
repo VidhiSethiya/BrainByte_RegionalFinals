@@ -117,7 +117,7 @@ export function TeamTag({ team }: { team: Team | "" | null | undefined }) {
 
 /**
  * Confidence: a bar alone is not an answer, so the number is always rendered too.
- * Below 0.70 the row is also telling the user it needs review.
+ * Below 0.50 the row is also telling the user it needs review.
  */
 export function ConfidenceMeter({
   value,
@@ -127,9 +127,13 @@ export function ConfidenceMeter({
   showBar?: boolean;
 }) {
   const score = typeof value === "number" && !Number.isNaN(value) ? value : 0;
-  const band = score >= 0.85 ? "is-high" : score >= 0.7 ? "is-mid" : "is-low";
+  const band = score >= 0.85 ? "is-high" : score >= 0.5 ? "is-mid" : "is-low";
   const wording =
-    score >= 0.85 ? "High confidence" : score >= 0.7 ? "Moderate confidence" : "Low confidence — needs review";
+    score >= 0.85
+      ? "High confidence"
+      : score >= 0.5
+        ? "Moderate confidence — auto-routes"
+        : "Low confidence — needs review";
 
   return (
     <Tooltip title={wording}>

@@ -95,7 +95,7 @@ RETRIEVAL_EVAL_SET: list[dict[str, Any]] = [
     {"query": "payments-api 5xx spike", "must_hit": "payments-api", "kind": "symptom"},
     {"query": "S1 respond minutes SLA", "must_hit": "15", "kind": "policy"},
     {"query": "who owns cloudsql-reporting", "must_hit": "gcp", "kind": "catalog"},
-    {"query": "escalation when confidence low", "must_hit": "0.70", "kind": "policy"},
+    {"query": "escalation when confidence low", "must_hit": "0.50", "kind": "policy"},
     {"query": "edge-proxy runbook fix", "must_hit": "edge-proxy", "kind": "runbook"},
 ]
 
