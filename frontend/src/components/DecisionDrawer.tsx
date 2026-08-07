@@ -231,7 +231,31 @@ export function DecisionBody({
     if (!externalKey) return true;
     return !citation.filename.includes(externalKey) && citation.doc_id !== ticket.id;
   });
-  const similarTickets: RetrievedChunk[] = similarQuery.data ?? [];
+  // One card per INC — search can return several chunks from the same ticket.
+  const similarTickets: RetrievedChunk[] = (() => {
+    const rows = similarQuery.data ?? [];
+    const seen = new Set<string>();
+    const unique: RetrievedChunk[] = [];
+    for (const chunk of rows) {
+      const key = String(
+        chunk.metadata?.external_id ||
+          chunk.metadata?.ticket_id ||
+          (chunk.filename || "").split(".")[0] ||
+          chunk.doc_id ||
+          chunk.id
+      ).trim();
+      if (!key || seen.has(key)) continue;
+      if (externalKey && (key === externalKey || (chunk.filename || "").includes(externalKey))) {
+        continue;
+      }
+      if (ticket.id && (chunk.metadata?.ticket_id === ticket.id || chunk.doc_id === ticket.id)) {
+        continue;
+      }
+      seen.add(key);
+      unique.push(chunk);
+    }
+    return unique;
+  })();
 
   function submitOverride(values: OverrideInput) {
     onOverride?.({ ...values, field: overrideField! });

@@ -264,6 +264,23 @@ Jira issue created/updated
   - **Status**: DONE
   - **Verifier (2026-08-07):** PASS — SQLite migrated 27 rows; queue shows Highest; Approve SCRUM-5→`routed`/`Highest`; analytics by_severity uses Highest/High/Medium/Low
 
+## Confidence for review (PRIORITY_RULEBOOK §8)
+
+- [x] **TASK-CONF-1**: Replace LLM self-score min with rulebook gates
+  - **Files**: `backend/ai/agents.py`
+  - **Acceptance Criteria**: `confidence = min(evidence_coverage, band_margin, precedent_agreement?)`; gate forces review when coverage < 0.60, margin < 0.10, confidence < 0.70, or Priority Highest; escalation_reason names the limiting gate
+  - **Status**: DONE
+
+- [x] **TASK-CONF-2**: Control Tower recalculate confidence
+  - **Files**: `backend/ai/agents.py`, `backend/api.py`, `frontend/src/api/client.ts`, `frontend/src/pages/Control.tsx`
+  - **Acceptance Criteria**: Manager can click "Recalculate confidence"; open tickets refresh Confidence + escalation_reason without full re-triage; queue "Why it stopped" uses gate reasons
+  - **Status**: DONE
+
+- [x] **TASK-CONF-3**: Auto-route at confidence ≥ 0.50
+  - **Files**: `backend/ai/agents.py`, `backend/ai/tools.py`, `docs/PRIORITY_RULEBOOK.md`, `frontend/src/pages/Control.tsx`, `frontend/src/components/SeverityTag.tsx`
+  - **Acceptance Criteria**: `CONFIDENCE_HUMAN_FLOOR` and `AUTO_APPROVE_CONFIDENCE` are 0.50; High/Medium/Low with conf ≥ 0.50 and no other hard floors write to Jira as `routed`; Highest still held; Control UI reflects 0.50 floor
+  - **Status**: DONE
+
 ### Handoff order (updated)
 
 1. ~~Phase J~~ DONE  

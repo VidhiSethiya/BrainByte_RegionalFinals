@@ -39,8 +39,8 @@ TEAM_CAPACITY_DEFAULT = 10
 # depend on the graph, only the graph (and the API layer) depend on this. If you
 # change one, change both; there is no automated check (this project ships no
 # test suite, CLAUDE.md golden rule 3), so this comment is the whole guardrail.
-AUTO_APPROVE_CONFIDENCE = 0.85
-AUTO_APPROVE_SEVERITIES = {"Medium", "Low"}
+AUTO_APPROVE_CONFIDENCE = 0.50
+AUTO_APPROVE_SEVERITIES = {"High", "Medium", "Low"}
 
 
 class ToolDenied(RuntimeError):
@@ -65,7 +65,7 @@ def similar_tickets(
         query,
         user=user or {},
         filters={"doc_type": "ticket_history", "resolved": "true"},
-        top_k=top_k + (4 if exclude_external_id else 0),
+        top_k=top_k * 3 + (4 if exclude_external_id else 0),
     )
     exclude = (exclude_external_id or "").strip()
     if exclude:
@@ -74,8 +74,24 @@ def similar_tickets(
             for c in chunks
             if (c.metadata.get("external_id") or "") != exclude
             and exclude not in (c.filename or "")
-        ][:top_k]
-    return [c.model_dump() for c in chunks]
+        ]
+    # One row per incident — tickets are indexed as multiple chunks.
+    seen: set[str] = set()
+    unique = []
+    for c in chunks:
+        key = str(
+            (c.metadata or {}).get("external_id")
+            or (c.metadata or {}).get("ticket_id")
+            or (c.filename or "").split(".", 1)[0]
+            or c.id
+        ).strip()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        unique.append(c)
+        if len(unique) >= top_k:
+            break
+    return [c.model_dump() for c in unique]
 
 
 def team_capacity(user: dict | None = None) -> dict[str, dict]:

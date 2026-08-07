@@ -218,6 +218,18 @@ export default function Control() {
     },
   });
 
+  const recalcConfidence = useMutation({
+    mutationFn: () => api.recalculateConfidence(),
+    onSuccess: ({ data }) => {
+      toast.success(
+        `Confidence recalculated for ${data.updated} ticket${data.updated === 1 ? "" : "s"}` +
+          (data.failed ? ` (${data.failed} failed)` : "")
+      );
+      invalidate();
+    },
+    onError: (error: Error) => toast.error(error.message || "Confidence recalculation failed"),
+  });
+
   const approve = useMutation({
     mutationFn: (id: string) => api.approve(id),
     onSuccess: ({ data }) => {
@@ -319,6 +331,15 @@ export default function Control() {
           </p>
         </Flex>
         <Space>
+          <Tooltip title="Recompute confidence with evidence coverage, band margin, and precedent agreement (no full re-triage).">
+            <Button
+              icon={<ReloadOutlined spin={recalcConfidence.isPending} />}
+              loading={recalcConfidence.isPending}
+              onClick={() => recalcConfidence.mutate()}
+            >
+              Recalculate confidence
+            </Button>
+          </Tooltip>
           <Tooltip title="Pull new/updated Jira issues and triage them. Charts refresh every 3s while sync runs.">
             <Button
               type="primary"
@@ -562,17 +583,24 @@ export default function Control() {
             },
             {
               title: "Why it stopped",
-              dataIndex: "id",
-              width: 240,
-              render: (_v, row) => (
-                <Typography.Text type="secondary" style={{ fontSize: 13 }}>
-                  {row.confidence < 0.7
-                    ? "Confidence below the routing gate"
-                    : row.severity === "Highest"
-                      ? "Highest Priority on a production path always needs a human"
-                      : "Held by policy for manager approval"}
-                </Typography.Text>
-              ),
+              dataIndex: "escalation_reason",
+              width: 280,
+              render: (_v, row) => {
+                const reason =
+                  row.escalation_reason?.trim() ||
+                  (row.severity === "Highest"
+                    ? "Priority Highest always requires approval"
+                    : row.confidence < 0.5
+                      ? "Confidence below the routing gate"
+                      : row.needs_human
+                        ? "Held for human review"
+                        : "—");
+                return (
+                  <Typography.Text type="secondary" style={{ fontSize: 13 }} ellipsis={{ tooltip: reason }}>
+                    {reason}
+                  </Typography.Text>
+                );
+              },
             },
             {
               title: "",

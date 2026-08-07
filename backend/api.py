@@ -33,7 +33,7 @@ from sqlalchemy import asc, desc, or_
 from werkzeug.utils import secure_filename
 
 from ai import tools
-from ai.agents import ingest_and_triage
+from ai.agents import ingest_and_triage, recalculate_all_open_confidence
 from ai.tools import ToolDenied
 from chatbot import session_manager as sessions
 from chatbot.conversation_manager import handle_message
@@ -490,6 +490,34 @@ def delete_document(doc_id: str):
     return ok({"deleted": doc_id, "chunks_removed": removed})
 
 
+def _ticket_chunk_key(chunk) -> str:
+    """Stable id for one incident across its many indexed chunks."""
+    meta = chunk.metadata or {}
+    return str(
+        meta.get("external_id")
+        or meta.get("ticket_id")
+        or (chunk.filename or "").split(".", 1)[0]
+        or chunk.doc_id
+        or chunk.id
+        or ""
+    ).strip()
+
+
+def _dedupe_ticket_history_chunks(chunks: list, limit: int) -> list:
+    """Keep the best-scoring chunk per ticket — similar-ticket UI is per INC, not per chunk."""
+    seen: set[str] = set()
+    out = []
+    for chunk in chunks:
+        key = _ticket_chunk_key(chunk)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        out.append(chunk)
+        if len(out) >= limit:
+            break
+    return out
+
+
 @api_bp.post("/search")
 @require_auth
 @rate_limit()
@@ -504,17 +532,25 @@ def search():
     if not query:
         return fail("validation_error", "query is required", 422)
 
+    top_k = int(body.get("top_k") or settings.FINAL_TOP_K)
+    filters = body.get("filters") or {}
+    exclude_ext = str(body.get("exclude_external_id") or "").strip()
+    exclude_id = str(body.get("exclude_ticket_id") or "").strip()
+    want_ticket_history = str(filters.get("doc_type") or "") == "ticket_history"
+    # Over-fetch when we will drop self-matches and/or collapse multi-chunk tickets.
+    fetch_k = top_k
+    if exclude_ext or exclude_id:
+        fetch_k += 8
+    if want_ticket_history:
+        fetch_k += top_k * 2
+
     chunks = retrieve(
         query,
         user=g.user,
-        filters=body.get("filters") or {},
-        top_k=int(body.get("top_k") or settings.FINAL_TOP_K) + (
-            6 if body.get("exclude_external_id") or body.get("exclude_ticket_id") else 0
-        ),
+        filters=filters,
+        top_k=fetch_k,
         decompose=bool(body.get("decompose")),
     )
-    exclude_ext = str(body.get("exclude_external_id") or "").strip()
-    exclude_id = str(body.get("exclude_ticket_id") or "").strip()
     if exclude_ext or exclude_id:
         filtered = []
         for c in chunks:
@@ -526,7 +562,11 @@ def search():
             if exclude_id and meta.get("ticket_id") == exclude_id:
                 continue
             filtered.append(c)
-        chunks = filtered[: int(body.get("top_k") or settings.FINAL_TOP_K)]
+        chunks = filtered
+    if want_ticket_history:
+        chunks = _dedupe_ticket_history_chunks(chunks, top_k)
+    else:
+        chunks = chunks[:top_k]
     audit.record("search.performed", user_id=g.user["id"], results=len(chunks))
     return ok(
         [c.model_dump() for c in chunks],
@@ -613,7 +653,23 @@ def team_queue():
         query = query.filter(Ticket.status.notin_(["resolved", "synced"]))
         query = apply_query(query, Ticket, params, searchable=["external_id", "title"])
         rows, meta = paginate(query, params)
-        return ok([r.to_dict() for r in rows], meta)
+        payload = []
+        for row in rows:
+            item = row.to_dict()
+            run = (
+                s.query(TriageRun)
+                .filter(TriageRun.ticket_id == row.id)
+                .order_by(TriageRun.created_at.desc())
+                .first()
+            )
+            if run and isinstance(run.decision_json, dict):
+                item["escalation_reason"] = run.decision_json.get("escalation_reason") or ""
+                item["confidence_limited_by"] = run.decision_json.get("confidence_limited_by") or ""
+                gates = run.decision_json.get("confidence_gates")
+                if isinstance(gates, dict):
+                    item["confidence_gates"] = gates
+            payload.append(item)
+        return ok(payload, meta)
 
 
 @api_bp.get("/tickets/<ticket_id>")
@@ -909,6 +965,29 @@ def integrations_webhook():
     row, state = ingest_and_triage(raw, system_user)
     audit.record("integrations.webhook_received", resource=row.id, external_id=row.external_id)
     return ok({"ticket_id": row.id, "status": row.status, "blocked": state.get("blocked", False)})
+
+
+@api_bp.post("/analytics/recalculate-confidence")
+@require_auth
+@require_role("admin", "manager")
+@rate_limit(per_minute=4)
+def recalculate_confidence():
+    """Recompute confidence for open tickets using PRIORITY_RULEBOOK §8 gates.
+    Control Tower uses this to refresh the Confidence column without a full re-triage."""
+    result = recalculate_all_open_confidence(user=g.user)
+    audit.record(
+        "tickets.confidence_recalculated",
+        user_id=g.user["id"],
+        updated=result.get("updated", 0),
+        failed=result.get("failed", 0),
+    )
+    return ok(
+        {
+            "updated": result.get("updated", 0),
+            "failed": result.get("failed", 0),
+            "errors": result.get("errors") or [],
+        }
+    )
 
 
 @api_bp.get("/analytics/triage")

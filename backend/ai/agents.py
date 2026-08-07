@@ -261,19 +261,32 @@ MAX_GRADE_RETRIES = 1
 MAX_REFLECT_RETRIES = 1
 
 # Below this, gate() sends the decision to a human regardless of severity.
-CONFIDENCE_HUMAN_FLOOR = 0.70
+CONFIDENCE_HUMAN_FLOOR = 0.50
 
-# Status bookkeeping only (Phase 1). The actual write-scope enforcement — refusing
-# to sync an unapproved decision — lives in ai/tools.py::ticket_update (Phase 2);
-# this graph never calls Jira directly, per rag-handoff.md §8.
-AUTO_APPROVE_CONFIDENCE = 0.85
-AUTO_APPROVE_SEVERITIES = {"Medium", "Low"}
+# Hard floors from docs/PRIORITY_RULEBOOK.md §8.5 — force review even when the
+# composite sits above CONFIDENCE_HUMAN_FLOOR. Coverage floor matches the
+# human/auto-route threshold so conf ≥ 0.50 is not blocked by a stricter
+# coverage-only cut.
+EVIDENCE_COVERAGE_FLOOR = 0.50
+BAND_MARGIN_FLOOR = 0.10
+
+# Auto-route band: conf ≥ floor and Priority not Highest → sync writes to Jira.
+# Enforced again in ai/tools.py::ticket_update (belt and braces).
+AUTO_APPROVE_CONFIDENCE = 0.50
+AUTO_APPROVE_SEVERITIES = {"High", "Medium", "Low"}
 
 # How many chunks enrich asks for. Higher than the chat graph's default top_k
 # because one ticket decision needs evidence from up to four doc_types in one
 # retrieval — precedent tickets, a runbook, the service catalogue, the SLA policy —
 # not just the single-topic answer a KB question usually needs.
 TRIAGE_ENRICH_TOP_K = 8
+
+# Priority-score decision boundaries (0–100). Used only for band_margin — the
+# Priority name still comes from assess/matrix, not from these cut-points alone.
+_SCORE_BOUNDARIES = (25, 50, 75)
+_POLICY_DOC_TYPES = frozenset(
+    {"runbook", "sla_policy", "escalation_matrix", "service_catalog", "policy"}
+)
 
 
 class TriageState(TypedDict, total=False):
@@ -317,6 +330,8 @@ class TriageState(TypedDict, total=False):
 
     # reflect
     confidence: float
+    confidence_gates: dict
+    confidence_limited_by: str
     reflect_issues: list[str]
     reflect_retry_enrich: bool
     reflect_rationale: str
@@ -643,18 +658,101 @@ def triage_route(state: TriageState) -> TriageState:
     }
 
 
+def _chunk_doc_type(chunk: RetrievedChunk) -> str:
+    return str((chunk.metadata or {}).get("doc_type") or "").strip().lower()
+
+
+def _evidence_coverage(state: TriageState) -> float:
+    """Share of decision-critical evidence that was actually retrieved.
+
+    Proxies the rulebook's evidenced÷applicable metrics using retrieval signals
+    available in the graph today (policy/runbook, catalogue, precedents, fill).
+    Groundedness from verify, when present, can only lower this gate.
+    """
+    chunks = list(state.get("chunks") or [])
+    if not chunks:
+        return 0.0
+
+    types = {_chunk_doc_type(c) for c in chunks}
+    signals: list[float] = []
+    signals.append(1.0 if types & _POLICY_DOC_TYPES else 0.0)
+    signals.append(1.0 if "service_catalog" in types else 0.0)
+    signals.append(1.0 if "ticket_history" in types else 0.0)
+    # Retrieval fill — empty top-k means thin context even if a type matched.
+    signals.append(min(1.0, len(chunks) / max(4, TRIAGE_ENRICH_TOP_K // 2)))
+
+    coverage = sum(signals) / len(signals)
+    grounded = state.get("groundedness")
+    if isinstance(grounded, (int, float)) and grounded > 0:
+        coverage = min(coverage, float(grounded))
+    return round(max(0.0, min(1.0, coverage)), 3)
+
+
+def _band_margin(state: TriageState) -> float:
+    """Normalised distance of priority_score to the nearest band boundary.
+
+    Near a cut-point (25/50/75) the Priority name is a coin flip — margin → 0.
+    Mid-band scores approach 1.0. See PRIORITY_RULEBOOK.md §8.3.
+    """
+    score = int(state.get("priority_score") or 50)
+    score = max(0, min(100, score))
+    dist = min(abs(score - b) for b in _SCORE_BOUNDARIES)
+    # Half-width of a 25-point band; clamp so mid-band (12.5 away) → 1.0.
+    return round(min(1.0, dist / 12.5), 3)
+
+
+def _precedent_agreement(state: TriageState) -> float | None:
+    """Share of retrieved ticket precedents whose Priority matches this decision.
+
+    Returns None when no ticket_history chunks were retrieved — omitted from
+    min(), not scored as zero (PRIORITY_RULEBOOK.md §8.3).
+    """
+    chunks = list(state.get("chunks") or [])
+    precedents = [c for c in chunks if _chunk_doc_type(c) == "ticket_history"]
+    if not precedents:
+        return None
+
+    decided = normalize_severity(state.get("severity")) or ""
+    if not decided:
+        return None
+
+    matches = 0
+    for chunk in precedents:
+        meta = chunk.metadata or {}
+        prior = normalize_severity(str(meta.get("severity") or meta.get("priority") or ""))
+        if prior and prior == decided:
+            matches += 1
+    return round(matches / len(precedents), 3)
+
+
+def _confidence_gates(state: TriageState) -> dict[str, float]:
+    """Named gates for the composite. Omitted keys are skipped by min()."""
+    gates: dict[str, float] = {
+        "evidence_coverage": _evidence_coverage(state),
+        "band_margin": _band_margin(state),
+    }
+    precedent = _precedent_agreement(state)
+    if precedent is not None:
+        gates["precedent_agreement"] = precedent
+    return gates
+
+
+def _score_confidence(state: TriageState) -> tuple[float, dict[str, float], str]:
+    """Confidence = weakest gate that applies (PRIORITY_RULEBOOK.md §8.3).
+
+    Returns (confidence, gates, limiting_gate_name).
+    """
+    gates = _confidence_gates(state)
+    if not gates:
+        return 0.0, {}, "none"
+    limiting = min(gates, key=gates.get)
+    return round(gates[limiting], 3), gates, limiting
+
+
 def _combined_confidence(state: TriageState) -> float:
-    """A decision chain is only as confident as its weakest link."""
-    vals = [
-        v
-        for v in (
-            state.get("classify_confidence"),
-            state.get("assess_confidence"),
-            state.get("route_confidence"),
-        )
-        if isinstance(v, (int, float))
-    ]
-    return min(vals) if vals else 0.0
+    """Public entry used by reflect — weakest confidence gate, not LLM self-scores."""
+    score, _, _ = _score_confidence(state)
+    return score
 
 
 def triage_reflect(state: TriageState) -> TriageState:
@@ -663,7 +761,7 @@ def triage_reflect(state: TriageState) -> TriageState:
     with min(), not just by the prompt's wording."""
     trace = state.get("trace")
     context = build_context(state.get("chunks") or [])
-    base_confidence = _combined_confidence(state)
+    base_confidence, gates, limited_by = _score_confidence(state)
 
     raw = chat_json(
         REFLECT_PROMPT.format(
@@ -684,6 +782,8 @@ def triage_reflect(state: TriageState) -> TriageState:
     final_confidence = base_confidence
     if verdict.lower_confidence_to is not None:
         final_confidence = min(base_confidence, verdict.lower_confidence_to)
+        if final_confidence < base_confidence:
+            limited_by = "reflect"
 
     retries = int(state.get("reflect_retries") or 0)
     # Same persistence rule as grade: clamp retry_enrich here. Router-only
@@ -694,6 +794,8 @@ def triage_reflect(state: TriageState) -> TriageState:
 
     return {
         "confidence": round(final_confidence, 3),
+        "confidence_gates": gates,
+        "confidence_limited_by": limited_by,
         "reflect_issues": verdict.issues,
         "reflect_retry_enrich": will_retry,
         "reflect_retries": retries + 1 if will_retry else retries,
@@ -784,19 +886,57 @@ def triage_verify(state: TriageState) -> TriageState:
 
 def triage_gate(state: TriageState) -> TriageState:
     """Human-in-the-loop gate. Nothing here ever auto-closes or auto-remediates —
-    it only decides whether a human must approve before sync() may write back."""
-    reasons = []
+    it only decides whether a human must approve before sync() may write back.
+
+    Confidence is recomputed here (PRIORITY_RULEBOOK.md §8) so groundedness from
+    verify can still lower evidence_coverage after reflect ran.
+    """
+    reasons: list[str] = []
+    confidence, gates, limited_by = _score_confidence(state)
+    # Reflect may only have lowered the score — never raise past that floor.
+    prior = state.get("confidence")
+    if isinstance(prior, (int, float)) and float(prior) < confidence:
+        confidence = float(prior)
+        limited_by = state.get("confidence_limited_by") or "reflect"
+
     if state.get("blocked"):
         reasons.append(f"guardrail: {state.get('blocked_reason') or 'blocked'}")
     if state.get("severity") == "Highest":
         reasons.append("Priority Highest always requires approval")
-    confidence = state.get("confidence", 0.0)
+
+    coverage = gates.get("evidence_coverage", 1.0)
+    margin = gates.get("band_margin", 1.0)
+    if coverage < EVIDENCE_COVERAGE_FLOOR:
+        reasons.append(
+            f"evidence coverage {coverage:.2f} below the {EVIDENCE_COVERAGE_FLOOR:.2f} floor "
+            f"(less than half of the decision-critical evidence was retrieved)"
+        )
+    if margin < BAND_MARGIN_FLOOR:
+        reasons.append(
+            f"band margin {margin:.2f} below the {BAND_MARGIN_FLOOR:.2f} floor "
+            f"(priority_score sits on a band boundary — coin flip)"
+        )
     if confidence < CONFIDENCE_HUMAN_FLOOR:
-        reasons.append(f"confidence {confidence:.2f} below the {CONFIDENCE_HUMAN_FLOOR:.2f} floor")
+        reasons.append(
+            f"confidence {confidence:.2f} below the {CONFIDENCE_HUMAN_FLOOR:.2f} floor "
+            f"(limited by {limited_by}"
+            + (
+                f"={gates[limited_by]:.2f}"
+                if limited_by in gates
+                else ""
+            )
+            + ")"
+        )
     if state.get("duplicate_of"):
         reasons.append(f"possible duplicate of {state['duplicate_of']} — confirm before routing")
 
-    return {"needs_human": bool(reasons), "escalation_reason": "; ".join(reasons)}
+    return {
+        "needs_human": bool(reasons),
+        "escalation_reason": "; ".join(reasons),
+        "confidence": round(confidence, 3),
+        "confidence_gates": gates,
+        "confidence_limited_by": limited_by,
+    }
 
 
 def triage_sync(state: TriageState) -> TriageState:
@@ -847,6 +987,8 @@ def triage_sync(state: TriageState) -> TriageState:
         severity=decision.severity,
         assigned_team=decision.assigned_team,
         confidence=decision.confidence,
+        confidence_gates=state.get("confidence_gates") or {},
+        confidence_limited_by=state.get("confidence_limited_by") or "",
         needs_human=needs_human,
         auto_approved=auto_approved,
         status=status,
@@ -1148,3 +1290,199 @@ def ingest_and_triage(raw_ticket: dict, user: dict) -> tuple[TicketRow, TriageSt
             trace_id=trace.id,
         )
         return row, state
+
+
+def recalculate_ticket_confidence(ticket_id: str, user: dict | None = None) -> dict[str, Any]:
+    """Recompute confidence with PRIORITY_RULEBOOK §8 gates (no full re-triage).
+
+    Re-retrieves evidence for coverage/precedent, keeps Priority/team/score from
+    the ticket row (and human overrides). Updates `tickets.confidence` and the
+    latest TriageRun.decision_json so Control Tower refreshes.
+    """
+    user = user or {
+        "id": "system:confidence",
+        "username": "system:confidence",
+        "role": "admin",
+        "clearances": ["all"],
+    }
+    with SessionLocal() as s:
+        row = s.get(TicketRow, ticket_id)
+        if row is None:
+            raise ValueError(f"ticket not found: {ticket_id}")
+        snapshot = {
+            "id": row.id,
+            "external_id": row.external_id,
+            "title": row.title or "",
+            "body_masked": row.body_masked or "",
+            "severity": row.severity or "",
+            "priority_score": int(row.priority_score or 50),
+            "assigned_team": row.assigned_team or "",
+            "overridden_by": row.overridden_by,
+            "status": row.status,
+            "needs_human": bool(row.needs_human),
+        }
+
+    query = f"{snapshot['title']}\n{snapshot['body_masked']}".strip() or snapshot["title"]
+    try:
+        chunks = retrieve(
+            query=query[:2000],
+            user=user,
+            top_k=TRIAGE_ENRICH_TOP_K,
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("confidence recalc retrieve failed for %s: %s", ticket_id, exc)
+        chunks = []
+
+    self_key = (snapshot["external_id"] or "").strip()
+    self_id = snapshot["id"]
+    chunks = [
+        c
+        for c in chunks
+        if (c.metadata.get("external_id") or "") != self_key
+        and (c.metadata.get("ticket_id") or "") != self_id
+        and not (self_key and self_key in (c.filename or ""))
+    ][:TRIAGE_ENRICH_TOP_K]
+
+    state: TriageState = {
+        "chunks": chunks,
+        "severity": snapshot["severity"],
+        "priority_score": snapshot["priority_score"],
+        "assigned_team": snapshot["assigned_team"],
+    }
+    confidence, gates, limited_by = _score_confidence(state)
+
+    reasons: list[str] = []
+    coverage = gates.get("evidence_coverage", 1.0)
+    margin = gates.get("band_margin", 1.0)
+    if snapshot["severity"] == "Highest":
+        reasons.append("Priority Highest always requires approval")
+    if coverage < EVIDENCE_COVERAGE_FLOOR:
+        reasons.append(
+            f"evidence coverage {coverage:.2f} below the {EVIDENCE_COVERAGE_FLOOR:.2f} floor"
+        )
+    if margin < BAND_MARGIN_FLOOR:
+        reasons.append(
+            f"band margin {margin:.2f} below the {BAND_MARGIN_FLOOR:.2f} floor"
+        )
+    if confidence < CONFIDENCE_HUMAN_FLOOR:
+        reasons.append(
+            f"confidence {confidence:.2f} below the {CONFIDENCE_HUMAN_FLOOR:.2f} floor "
+            f"(limited by {limited_by}"
+            + (f"={gates[limited_by]:.2f}" if limited_by in gates else "")
+            + ")"
+        )
+    needs_human = bool(reasons)
+    escalation = "; ".join(reasons)
+    sev = normalize_severity(snapshot["severity"]) or snapshot["severity"]
+    auto_route = (
+        not needs_human
+        and confidence >= AUTO_APPROVE_CONFIDENCE
+        and sev in AUTO_APPROVE_SEVERITIES
+        and bool(snapshot["assigned_team"])
+        and not snapshot["overridden_by"]
+    )
+
+    with SessionLocal() as s:
+        row = s.get(TicketRow, ticket_id)
+        row.confidence = confidence
+        # Do not clobber a completed override/route — only refresh gate for open reviews.
+        if row.status in ("awaiting_approval", "triaged", "failed", "new") and not row.overridden_by:
+            row.needs_human = needs_human
+            if needs_human and row.status in ("triaged", "new", "failed"):
+                row.status = "awaiting_approval"
+            elif not needs_human and row.status in ("awaiting_approval", "triaged", "new", "failed"):
+                row.status = "routed" if auto_route else "triaged"
+        run = (
+            s.query(TriageRun)
+            .filter(TriageRun.ticket_id == ticket_id)
+            .order_by(TriageRun.created_at.desc())
+            .first()
+        )
+        if run is not None:
+            decision = dict(run.decision_json or {})
+            decision["confidence"] = confidence
+            decision["escalation_reason"] = escalation
+            decision["confidence_gates"] = gates
+            decision["confidence_limited_by"] = limited_by
+            decision["needs_human"] = needs_human if not row.overridden_by else decision.get("needs_human", False)
+            run.decision_json = decision
+        s.commit()
+        out = row.to_dict()
+        external_key = (row.external_id or "").strip()
+        routed_now = row.status == "routed" and auto_route
+        fields = {
+            "severity": row.severity,
+            "priority_score": row.priority_score,
+            "assigned_team": row.assigned_team,
+            "confidence": confidence,
+        }
+
+    if routed_now:
+        from ai.tools import ToolDenied, call as tool_call, get_ticket_source
+
+        try:
+            tool_call(
+                "ticket_update",
+                ticket_id,
+                fields,
+                user=user,
+                ticket_status="routed",
+                confidence=confidence,
+                severity=sev,
+            )
+        except ToolDenied as exc:
+            log.warning("confidence-recalc ticket_update denied for %s: %s", ticket_id, exc)
+        else:
+            if external_key:
+                try:
+                    from integrations.jira import normalize_priority
+
+                    src = get_ticket_source()
+                    pname = normalize_priority(sev) or "Medium"
+                    src.add_comment(
+                        external_key,
+                        f"TicketSphere auto-routed (confidence recalc): {pname} · "
+                        f"{fields.get('assigned_team')} · "
+                        f"confidence {confidence:.0%}.",
+                    )
+                    src.transition(external_key, "routed")
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("confidence-recalc Jira write-back failed for %s: %s", ticket_id, exc)
+
+    out["escalation_reason"] = escalation
+    out["confidence_gates"] = gates
+    out["confidence_limited_by"] = limited_by
+    audit.record(
+        "ticket.confidence_recalculated",
+        user_id=(user or {}).get("id"),
+        resource=ticket_id,
+        confidence=confidence,
+        limited_by=limited_by,
+        gates=gates,
+        needs_human=needs_human,
+        auto_routed=bool(routed_now),
+    )
+    return out
+
+
+def recalculate_all_open_confidence(user: dict | None = None) -> dict[str, Any]:
+    """Batch recalc for Control Tower — every non-resolved open ticket with a Priority."""
+    with SessionLocal() as s:
+        rows = (
+            s.query(TicketRow)
+            .filter(TicketRow.status.notin_(["resolved", "synced"]))
+            .filter(TicketRow.severity.isnot(None))
+            .filter(TicketRow.severity != "")
+            .all()
+        )
+        ids = [r.id for r in rows]
+
+    updated = []
+    failed = []
+    for tid in ids:
+        try:
+            updated.append(recalculate_ticket_confidence(tid, user=user))
+        except Exception as exc:  # noqa: BLE001
+            log.error("confidence recalc failed for %s: %s", tid, exc)
+            failed.append({"ticket_id": tid, "error": str(exc)[:200]})
+    return {"updated": len(updated), "failed": len(failed), "tickets": updated, "errors": failed}

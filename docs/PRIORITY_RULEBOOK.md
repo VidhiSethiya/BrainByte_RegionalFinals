@@ -321,8 +321,8 @@ They are the same number, converted once at the display boundary
 (`toConfidenceOutOf10()` in `components/SeverityTag.tsx`). Storage has to remain a
 probability for two reasons: §8.5 defines confidence as *the chance a human upholds this
 decision*, and a probability is the only form you can check against an actual outcome
-rate; and the backend's thresholds — `AUTO_APPROVE_CONFIDENCE = 0.85`,
-`CONFIDENCE_HUMAN_FLOOR = 0.70` — are expressed on that scale. A reader, meanwhile, takes
+rate; and the backend's thresholds — `AUTO_APPROVE_CONFIDENCE = 0.50`,
+`CONFIDENCE_HUMAN_FLOOR = 0.50` — are expressed on that scale. A reader, meanwhile, takes
 `7.2 / 10` faster than `0.72`.
 
 Same rule as P1–P4 versus Jira's Priority names in §3: one canonical internal form, one
@@ -330,9 +330,9 @@ readable form, translated in exactly one place.
 
 | Shown | Stored | Means |
 |---|---|---|
-| `8.5 – 10` | `0.85 – 1.00` | inside the auto-approve band (with P3/P4 only) |
-| `7.0 – 8.5` | `0.70 – 0.85` | moderate — routed normally |
-| `< 7.0` | `< 0.70` | below the human floor — goes to a manager |
+| `8.5 – 10` | `0.85 – 1.00` | strong — auto-routes (High/Medium/Low) |
+| `5.0 – 8.5` | `0.50 – 0.85` | at/above the floor — auto-routes when no hard floor fires |
+| `< 5.0` | `< 0.50` | below the human floor — goes to a manager |
 
 ### 8.3 What it is now
 
@@ -387,7 +387,7 @@ the composite says:
 | Condition | Why |
 |---|---|
 | `band_margin < 0.10` | a coin flip between two bands is a human's decision, not a model's |
-| `evidence_coverage < 0.60` | more than 40% of the rubric was assumed rather than read |
+| `evidence_coverage < 0.50` | aligned with the confidence human floor — thin evidence cannot auto-route |
 
 Plus the existing rules from §7 and the graph: any P1, any fired escalator, any guardrail
 hit, and any **downgrade** of a human-reported priority (§9).
