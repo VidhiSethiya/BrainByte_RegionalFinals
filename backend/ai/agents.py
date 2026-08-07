@@ -430,7 +430,13 @@ def triage_enrich(state: TriageState) -> TriageState:
     """
     trace = state.get("trace")
     ticket = state["ticket"]
-    query = state.get("query") or f"{ticket.title}\n{ticket.body_masked}"[:800]
+    # Prefer a CRAG rewrite when grade asked for one — must be read here, not
+    # written in the router (LangGraph conditional-edge mutations do not persist).
+    query = (
+        state.get("grade_rewrite_query")
+        or state.get("query")
+        or f"{ticket.title}\n{ticket.body_masked}"[:800]
+    )
 
     def _do_retrieve() -> list[RetrievedChunk]:
         return retrieve(
@@ -483,10 +489,23 @@ def triage_grade(state: TriageState) -> TriageState:
     re-retrieve loop, RAG only grades. See rag-handoff.md §2.2."""
     trace = state.get("trace")
     result = grade_chunks(state.get("query", ""), state.get("chunks") or [], trace=trace)
+    retries = int(state.get("grade_retries") or 0)
+    # Budget the rewrite in this node (state updates persist). Mutating
+    # grade_retries inside route_after_triage_grade does not — that caused
+    # unbounded enrich↔grade loops when the grader kept asking to rewrite.
+    will_retry = (
+        result.action == "rewrite"
+        and bool(result.rewrite_query)
+        and retries < MAX_GRADE_RETRIES
+    )
     return {
         "chunks": result.chunks,
-        "grade_action": result.action,
-        "grade_rewrite_query": result.rewrite_query,
+        "grade_action": "rewrite" if will_retry else (
+            "filter" if result.action == "rewrite" else result.action
+        ),
+        "grade_rewrite_query": result.rewrite_query if will_retry else "",
+        "grade_retries": retries + 1 if will_retry else retries,
+        "query": result.rewrite_query if will_retry else state.get("query", ""),
     }
 
 
@@ -651,10 +670,18 @@ def triage_reflect(state: TriageState) -> TriageState:
     if verdict.lower_confidence_to is not None:
         final_confidence = min(base_confidence, verdict.lower_confidence_to)
 
+    retries = int(state.get("reflect_retries") or 0)
+    # Same persistence rule as grade: clamp retry_enrich here. Router-only
+    # increments of reflect_retries were discarded by LangGraph, so gpt-5.1
+    # saying retry_enrich=true looped enrich forever → webhook/sync hung and
+    # tickets landed as status=failed with "could not complete".
+    will_retry = bool(verdict.retry_enrich) and retries < MAX_REFLECT_RETRIES
+
     return {
         "confidence": round(final_confidence, 3),
         "reflect_issues": verdict.issues,
-        "reflect_retry_enrich": verdict.retry_enrich,
+        "reflect_retry_enrich": will_retry,
+        "reflect_retries": retries + 1 if will_retry else retries,
         "reflect_rationale": verdict.rationale,
     }
 
@@ -791,21 +818,17 @@ def route_after_triage_normalize(state: TriageState) -> str:
 
 
 def route_after_triage_grade(state: TriageState) -> str:
-    if (
-        state.get("grade_action") == "rewrite"
-        and state.get("grade_retries", 0) < MAX_GRADE_RETRIES
-        and state.get("grade_rewrite_query")
-    ):
-        state["grade_retries"] = state.get("grade_retries", 0) + 1
-        state["query"] = state["grade_rewrite_query"]
+    # Retry budget is enforced in triage_grade (persisted state). Do not mutate
+    # state here — LangGraph conditional-edge side effects are discarded.
+    if state.get("grade_action") == "rewrite" and state.get("grade_rewrite_query"):
         log.info("CRAG grade requested a rewrite — retrying enrich once")
         return "enrich"
     return "classify"
 
 
 def route_after_triage_reflect(state: TriageState) -> str:
-    if state.get("reflect_retry_enrich") and state.get("reflect_retries", 0) < MAX_REFLECT_RETRIES:
-        state["reflect_retries"] = state.get("reflect_retries", 0) + 1
+    # Retry budget is enforced in triage_reflect (persisted state).
+    if state.get("reflect_retry_enrich"):
         log.info("reflection flagged an evidence gap — retrying enrich once")
         return "enrich"
     return "verify"
@@ -1035,11 +1058,14 @@ def ingest_and_triage(raw_ticket: dict, user: dict) -> tuple[TicketRow, TriageSt
                     )
                 else:
                     try:
+                        from integrations.jira import priority_group
+
                         src = get_ticket_source()
+                        pgroup = priority_group(decision.severity) or "Medium"
                         src.add_comment(
                             external_key,
                             f"TicketSphere auto-approved: {decision.severity} · "
-                            f"{decision.assigned_team} · priority {decision.priority_score} · "
+                            f"Priority {pgroup} · {decision.assigned_team} · "
                             f"confidence {decision.confidence:.0%}. "
                             f"{(decision.rationale or '')[:400]}",
                         )

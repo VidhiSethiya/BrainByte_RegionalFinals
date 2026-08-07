@@ -657,11 +657,31 @@ def approve_ticket(ticket_id: str):
     calling the ticket source directly.
 
     Adapter calls use Ticket.external_id (Jira key), never the SQLite UUID.
+
+    Refuses tickets that never finished triage (empty severity/team) — approving
+    those previously wrote blank Jira comments like
+    "TicketSphere:  ·  · priority 0 · confidence 0%".
     """
     with SessionLocal() as s:
         row = s.get(Ticket, ticket_id)
         if not row:
             return fail("not_found", "Ticket not found", 404)
+
+        severity = (row.severity or "").strip()
+        assigned_team = (row.assigned_team or "").strip()
+        if not severity or not assigned_team:
+            return fail(
+                "not_ready",
+                "Ticket has no triage decision yet (severity/team empty). "
+                "Wait for a successful triage or re-sync before approving.",
+                409,
+            )
+        if row.status == "failed":
+            return fail(
+                "not_ready",
+                "Ticket triage failed — re-run sync/poll before approving.",
+                409,
+            )
 
         row.status = "approved"
         s.commit()
@@ -669,15 +689,12 @@ def approve_ticket(ticket_id: str):
 
         external_id = (row.external_id or "").strip()
         fields = {
-            "severity": row.severity,
+            "severity": severity,
             "priority_score": row.priority_score,
-            "assigned_team": row.assigned_team,
+            "assigned_team": assigned_team,
             "confidence": row.confidence,
         }
-        confidence = row.confidence
-        severity = row.severity
-        assigned_team = row.assigned_team
-        priority_score = row.priority_score
+        confidence = row.confidence or 0.0
 
     try:
         result = tools.call(
@@ -699,11 +716,16 @@ def approve_ticket(ticket_id: str):
         )
     else:
         try:
+            from integrations.jira import priority_group
+
             source = tools.get_ticket_source()
+            pgroup = priority_group(severity)
+            if not pgroup:
+                raise ValueError(f"severity {severity!r} has no Jira Priority group")
             source.add_comment(
                 external_id,
-                f"TicketSphere: {severity} · {assigned_team} · "
-                f"priority {priority_score} · confidence {confidence:.0%}. "
+                f"TicketSphere: {severity} · Priority {pgroup} · {assigned_team} · "
+                f"confidence {confidence:.0%}. "
                 f"Approved by {g.user.get('username', g.user['id'])}.",
             )
             source.transition(external_id, "routed")
