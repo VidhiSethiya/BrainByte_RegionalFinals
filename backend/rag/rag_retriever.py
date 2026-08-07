@@ -6,14 +6,11 @@ a code change:
   vector (default)   rewrite -> embed -> Chroma cosine search -> top-k
   hybrid             rewrite -> vector + BM25 -> RRF fusion -> [rerank] -> top-k
 
-Start on `vector`. It is simpler, has one failure mode, and on a corpus of prose it is
-usually enough. Switch to `hybrid` only when the corpus carries **exact identifiers** —
-contract numbers, SKUs, error codes, policy IDs — because dense embeddings compress
-meaning and blur those tokens, while BM25 matches them literally. Run both against the
-eval set on the day and keep whichever wins; the answer depends on the corpus, not on
-which is fashionable.
+TicketSphere defaults to hybrid because the corpus carries exact identifiers
+(INC…, ORA-…, HTTP 502, service names) that dense embeddings blur.
 
 Access control is applied inside the vector query in both modes, never afterwards.
+Defence-in-depth `can_read` still runs after Chroma returns.
 """
 
 from __future__ import annotations
@@ -29,11 +26,41 @@ from config import settings
 from db.vectordb import vector_store
 from guardrails.governance.access_control import build_where, can_read
 from observability.telemetry import log
-from rag.schemas import Citation, RetrievedChunk
+from rag.schemas import ChunkGradeVerdict, Citation, GradeResult, RetrievedChunk
 
 _TOKEN_RE = re.compile(r"[a-z0-9_./-]+")
 _bm25_cache: dict[str, tuple[int, Any, list[dict]]] = {}
 _bm25_lock = threading.Lock()
+
+# Lives here (not ai/prompts.py) so the RAG layer owns CRAG without crossing team
+# boundaries; agents may later move this constant into prompts.py.
+CRAG_GRADE_PROMPT = """\
+You are a retrieval grader for an IT ticket-intelligence system.
+Given a ticket/query and retrieved evidence chunks, decide whether the chunks
+are actually about this failure.
+
+Return JSON only, matching this schema:
+{{
+  "action": "keep" | "filter" | "rewrite",
+  "keep_labels": ["C1", "C2"],
+  "rewrite_query": "optional better search query if action is rewrite",
+  "reason": "short explanation"
+}}
+
+Rules:
+- "keep" — most chunks are on-topic; keep_labels may be all of them.
+- "filter" — drop off-topic chunks; keep_labels lists only the relevant ones.
+- "rewrite" — evidence is mostly irrelevant; suggest one rewrite_query for a
+  single re-retrieve. Do not invent facts.
+- Prefer "filter" over "rewrite" when at least one chunk is useful.
+- Ticket ids (INC…) and error codes in the query are strong relevance signals.
+
+Query:
+{query}
+
+Chunks:
+{chunks}
+"""
 
 
 def hybrid_enabled() -> bool:
@@ -182,11 +209,65 @@ def rerank(query: str, hits: list[dict], top_k: int) -> list[dict]:
         return hits[:top_k]
 
 
+# --- CRAG grading -----------------------------------------------------------
+
+
+def grade_chunks(
+    query: str,
+    chunks: list[RetrievedChunk],
+    trace=None,
+) -> GradeResult:
+    """CRAG: keep / filter / rewrite. Does not re-retrieve — agents own that loop.
+
+    Returns filtered chunks plus an optional rewrite_query hint for one retry.
+    """
+    if not chunks:
+        return GradeResult(chunks=[], action="none", reason="no chunks to grade")
+
+    rendered = "\n\n".join(
+        f"[{c.label}] ({c.filename})\n{c.text[:1200]}" for c in chunks
+    )
+    raw = chat_json(
+        CRAG_GRADE_PROMPT.format(query=query, chunks=rendered),
+        fast=True,
+        trace=trace,
+        default={},
+    ) or {}
+
+    try:
+        verdict = ChunkGradeVerdict.model_validate(raw)
+    except Exception:  # noqa: BLE001
+        log.warning("CRAG grade parse failed — keeping all chunks")
+        return GradeResult(chunks=chunks, action="keep", reason="grade parse failed; kept all")
+
+    if verdict.action == "rewrite":
+        return GradeResult(
+            chunks=chunks,
+            action="rewrite",
+            rewrite_query=(verdict.rewrite_query or "").strip() or None,
+            reason=verdict.reason,
+        )
+
+    if verdict.action == "filter" and verdict.keep_labels:
+        keep = {lbl.strip() for lbl in verdict.keep_labels}
+        filtered = [c for c in chunks if c.label in keep]
+        # Relabel for stable C1..Cn citation positions after filtering.
+        for i, chunk in enumerate(filtered, start=1):
+            chunk.metadata = {**chunk.metadata, "label": f"C{i}"}
+        return GradeResult(
+            chunks=filtered or chunks,
+            action="filter",
+            reason=verdict.reason,
+        )
+
+    return GradeResult(chunks=chunks, action="keep", reason=verdict.reason or "kept")
+
+
 # --- entrypoint -------------------------------------------------------------
 
 
 def retrieve(
-    question: str,
+    query: str,
     user: dict,
     summary: str = "",
     filters: dict[str, str] | None = None,
@@ -194,13 +275,21 @@ def retrieve(
     decompose: bool = False,
     trace=None,
 ) -> list[RetrievedChunk]:
-    """Retrieve for one question, scoped to what `user` may read."""
+    """Retrieve for one query, scoped to what `user` may read.
+
+    `filters` are Chroma metadata equality filters merged into the ACL `where`
+    clause. TicketSphere keys: doc_type, team, service, environment, category,
+    severity, resolved (string "true"/"false").
+
+    First positional argument is `query` (contract name). Callers that still
+    pass a bare positional string remain compatible.
+    """
     top_k = top_k or settings.FINAL_TOP_K
     where = build_where(user, extra=filters)
     candidates = settings.RETRIEVE_TOP_K
 
-    query = rewrite_query(question, summary, trace=trace)
-    queries = decompose_query(query, trace=trace) if decompose else [query]
+    rewritten = rewrite_query(query, summary, trace=trace)
+    queries = decompose_query(rewritten, trace=trace) if decompose else [rewritten]
 
     if hybrid_enabled():
         tasks: list[Any] = []
@@ -219,9 +308,21 @@ def retrieve(
                     seen[hit["id"]] = {**hit, "vector_rank": hit["rank"], "keyword_rank": None}
         ranked = sorted(seen.values(), key=lambda h: h["score"], reverse=True)
 
-    # Defence in depth — the store already filtered, this catches ACL/where drift.
-    ranked = [h for h in ranked if can_read(user, h.get("metadata", {}))]
-    top = rerank(query, ranked[: candidates * 2], top_k) if hybrid_enabled() else ranked[:top_k]
+    # Defence in depth — the store already filtered; log any ACL miss as drift.
+    allowed: list[dict] = []
+    dropped = 0
+    for h in ranked:
+        if can_read(user, h.get("metadata", {})):
+            allowed.append(h)
+        else:
+            dropped += 1
+    if dropped:
+        log.warning(
+            "ACL defence-in-depth dropped %d chunk(s) that passed Chroma where",
+            dropped,
+        )
+    ranked = allowed
+    top = rerank(rewritten, ranked[: candidates * 2], top_k) if hybrid_enabled() else ranked[:top_k]
 
     chunks = []
     for position, hit in enumerate(top, start=1):
@@ -241,7 +342,12 @@ def retrieve(
             )
         )
 
-    log.info("retrieved %d chunks (%s mode) for %r", len(chunks), settings.RETRIEVAL_MODE, query[:60])
+    log.info(
+        "retrieved %d chunks (%s mode) for %r",
+        len(chunks),
+        settings.RETRIEVAL_MODE,
+        rewritten[:60],
+    )
     return chunks
 
 

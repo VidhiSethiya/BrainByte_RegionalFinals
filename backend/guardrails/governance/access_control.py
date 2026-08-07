@@ -6,9 +6,12 @@ query — filtering after retrieval would mean unauthorised text still reached t
 prompt, and top-k would silently degrade for restricted users.
 
 Metadata convention (written by rag/chunker.py):
-    acl_<role> = True     one key per role permitted to see the chunk
-    acl_public = True     readable by any authenticated user
-    sensitivity = str     public | internal | confidential | restricted
+    acl_<role_or_team> = True   one key per role/team permitted to see the chunk
+    acl_public = True           readable by any authenticated user
+    sensitivity = str           public | internal | confidential | restricted
+
+TicketSphere: team membership rides on user.clearances (ops|azure|aws|gcp) which
+map to acl_ops / acl_azure / … — same mechanism as roles, no special case.
 """
 
 from __future__ import annotations
@@ -21,17 +24,18 @@ PUBLIC_KEY = "acl_public"
 # A user holding this clearance bypasses filtering entirely.
 SUPER_CLEARANCE = "all"
 
-# Sensitivity a role may read up to. [PLACEHOLDER: DOMAIN_SENSITIVITY_MATRIX]
+# Sensitivity a role may read up to.
 MAX_SENSITIVITY = {
     "admin": "restricted",
-    "analyst": "confidential",
+    "manager": "restricted",
+    "engineer": "confidential",
     "viewer": "internal",
 }
 _ORDER = ["public", "internal", "confidential", "restricted"]
 
 
 def acl_metadata(allowed_roles: list[str]) -> dict[str, bool]:
-    """Expand a role list into the flat boolean keys Chroma can filter on.
+    """Expand a role/team list into the flat boolean keys Chroma can filter on.
 
     Chroma metadata values must be scalars, so a list column is not filterable — one
     key per role is the workaround, and it stays fast because it is an exact match.
@@ -92,6 +96,13 @@ def can_read(user: dict, metadata: dict) -> bool:
     clearances = (user or {}).get("clearances") or []
     if role == "admin" or SUPER_CLEARANCE in clearances:
         return True
+
+    sensitivity = (metadata or {}).get("sensitivity") or "internal"
+    ceiling = MAX_SENSITIVITY.get(role, "internal")
+    if sensitivity in _ORDER and ceiling in _ORDER:
+        if _ORDER.index(sensitivity) > _ORDER.index(ceiling):
+            return False
+
     if metadata.get(PUBLIC_KEY):
         return True
     return any(metadata.get(f"{ACL_PREFIX}{r}") for r in [role, *clearances])

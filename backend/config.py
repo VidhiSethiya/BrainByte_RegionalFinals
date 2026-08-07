@@ -48,11 +48,22 @@ class Settings:
     LLM_PROVIDER = os.getenv("LLM_PROVIDER", "local").strip().lower()
     OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "ollama")
     OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "http://localhost:11434/v1")
-    LLM_MODEL = os.getenv("LLM_MODEL", "llama-3.2-3b-it:latest")
+    LLM_MODEL = os.getenv("LLM_MODEL", "llama-3.2-3b-it:latest")       # standard tier
     FAST_LLM_MODEL = os.getenv("FAST_LLM_MODEL", LLM_MODEL)
-    EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "gte-large:latest")
+    # Hosted embedding default — changing this invalidates Chroma; reseed after swap.
+    EMBEDDING_MODEL = os.getenv(
+        "EMBEDDING_MODEL", "azure/genailab-maas-text-embedding-3-large"
+    )
     # Vision-capable model for images / scanned pages. Empty disables the vision path.
     VISION_MODEL = os.getenv("VISION_MODEL", "").strip()
+    REASONING_MODEL = os.getenv("REASONING_MODEL", "").strip()
+    WHISPER_MODEL = os.getenv("WHISPER_MODEL", "").strip()
+    # What ai/llm.py actually requests for every tier once resolve_provider() has
+    # fallen back to local — LLM_MODEL/FAST_LLM_MODEL/REASONING_MODEL/EMBEDDING_MODEL
+    # above may hold hosted-only ids (azure/genailab-maas-...) that don't exist on a
+    # local Ollama daemon and would 404 rather than gracefully degrade.
+    LOCAL_CHAT_MODEL = os.getenv("LOCAL_CHAT_MODEL", "llama-3.2-3b-it:latest")
+    LOCAL_EMBEDDING_MODEL = os.getenv("LOCAL_EMBEDDING_MODEL", "gte-large:latest")
     LLM_TEMPERATURE = _float("LLM_TEMPERATURE", 0.1)
     LLM_TIMEOUT_SECONDS = _int("LLM_TIMEOUT_SECONDS", 60)
     LLM_MAX_RETRIES = _int("LLM_MAX_RETRIES", 1)
@@ -76,11 +87,10 @@ class Settings:
     SEED_DIR = _path("SEED_DIR", "seed", VECTOR_DIR)
 
     # --- retrieval ---
-    # "vector" = embedding similarity only (the default).
-    # "hybrid" = vector + BM25 keyword, fused with RRF, then optionally reranked.
-    # Decide on build day: hybrid earns its keep only when the corpus carries exact
-    # identifiers (contract/policy/part numbers) that embeddings blur.
-    RETRIEVAL_MODE = os.getenv("RETRIEVAL_MODE", "vector").strip().lower()
+    # TicketSphere: hybrid is the earned default — INC/error codes need BM25.
+    # "vector" remains available for A/B; set winner in .env after eval.
+    RETRIEVAL_MODE = os.getenv("RETRIEVAL_MODE", "hybrid").strip().lower()
+    TICKET_SOURCE = os.getenv("TICKET_SOURCE", "synthetic").strip().lower()
     CHUNK_SIZE = _int("CHUNK_SIZE", 900)
     CHUNK_OVERLAP = _int("CHUNK_OVERLAP", 150)
     RETRIEVE_TOP_K = _int("RETRIEVE_TOP_K", 20)
@@ -107,9 +117,30 @@ class Settings:
     FLASK_DEBUG = _bool("FLASK_DEBUG", True)
     FRONTEND_DIST = REPO_ROOT / "frontend" / "dist"
 
-    # --- domain (filled by the guide-me blueprint) ---
-    DOMAIN = os.getenv("DOMAIN", "[DOMAIN]")
-    ROLES = ["admin", "analyst", "viewer"]  # [PLACEHOLDER: DOMAIN_ROLES]
+    # --- domain (TicketSphere) ---
+    DOMAIN = os.getenv("DOMAIN", "TicketSphere")
+    ROLES = ["admin", "manager", "engineer", "viewer"]
+    TEAMS = ["ops", "azure", "aws", "gcp"]
+
+    # --- ticket source: Jira integration (backend/integrations/) ---
+    # "synthetic" (default) reads db/vectordb/data/seed/tickets/*.json and never
+    # calls out anywhere — the safe default and the offline fallback. "jira"
+    # requires the four JIRA_* values below. Poll-based sync is primary; see
+    # backend/integrations/jira.py's module docstring for why.
+    JIRA_BASE_URL = os.getenv("JIRA_BASE_URL", "").rstrip("/")
+    JIRA_EMAIL = os.getenv("JIRA_EMAIL", "").strip()
+    JIRA_API_TOKEN = os.getenv("JIRA_API_TOKEN", "").strip()
+    JIRA_PROJECT_KEY = os.getenv("JIRA_PROJECT_KEY", "SCRUM").strip()
+    JIRA_POLL_SECONDS = _int("JIRA_POLL_SECONDS", 30)
+    # Per-site custom field ids (customfield_10xxx) — cannot be guessed from
+    # documentation. Empty means "don't write that field" rather than a wrong
+    # guess landing quietly in the wrong place. Confirm the real ids against the
+    # board (Project settings -> Fields, or GET /rest/api/3/issue/<key>?expand=names)
+    # and set these once you have access.
+    JIRA_FIELD_SEVERITY = os.getenv("JIRA_FIELD_SEVERITY", "").strip()
+    JIRA_FIELD_PRIORITY_SCORE = os.getenv("JIRA_FIELD_PRIORITY_SCORE", "").strip()
+    JIRA_FIELD_ROUTED_TEAM = os.getenv("JIRA_FIELD_ROUTED_TEAM", "").strip()
+    JIRA_FIELD_AI_CONFIDENCE = os.getenv("JIRA_FIELD_AI_CONFIDENCE", "").strip()
 
     def ensure_dirs(self) -> None:
         for d in (SQLITE_DIR, VECTOR_DIR, self.CHROMA_PERSIST_DIR, self.UPLOAD_DIR, self.SEED_DIR):

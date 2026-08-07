@@ -24,11 +24,17 @@ chromadb>=0.5.20
 pymupdf>=1.25.0
 pillow>=11.0.0
 
-# --- optional: only needed when RETRIEVAL_MODE=hybrid ---
-# BM25 keyword index. Tiny, pure Python — safe to install now even if unused.
+# --- keyword search (BM25 side of hybrid fusion) ---
+# TicketSphere ships with RETRIEVAL_MODE=hybrid as the default (the corpus carries
+# exact identifiers — INC…, ORA-…, error codes — that embeddings alone blur), so
+# this is load-bearing, not optional. Tiny, pure Python.
 rank-bm25>=0.2.2
 
-# --- optional: cross-encoder reranker (RERANK_ENABLED=true) ---
-# Pulls torch (~2GB). The retriever degrades to fusion order if absent, so install
-# this only if the machine can take it and hybrid mode is actually chosen.
-# sentence-transformers>=3.3.0
+# --- cross-encoder reranker (RERANK_ENABLED=true in .env, off by default) ---
+# Pulls torch (~2GB) on first install. The retriever degrades gracefully to fusion
+# order if this import fails at runtime (backend/rag/rag_retriever.py::_cross_encoder),
+# so it is safe to install even on a machine that never flips RERANK_ENABLED on —
+# but every third-party import in the codebase should resolve via one
+# `pip install -r requirements.txt`, so it is uncommented rather than left as a
+# manual follow-up step to remember on demo day.
+sentence-transformers>=3.3.0
