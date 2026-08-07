@@ -117,7 +117,8 @@ class JiraSource(TicketSource):
                     "maxResults": limit,
                     "fields": [
                         "summary", "description", "status", "priority", "reporter",
-                        "labels", "components", "updated", "created", "issuetype",
+                        "assignee", "labels", "components", "updated", "created",
+                        "issuetype",
                     ],
                 },
             )
@@ -130,29 +131,7 @@ class JiraSource(TicketSource):
             return []
 
         issues = resp.json().get("issues", [])
-        return [self._to_ticket_dict(issue) for issue in issues]
-
-    def _to_ticket_dict(self, issue: dict) -> dict[str, Any]:
-        fields = issue.get("fields", {}) or {}
-        components = [c.get("name", "") for c in (fields.get("components") or [])]
-        return {
-            "external_id": issue.get("key", ""),
-            "source": "jira",
-            "title": fields.get("summary") or "",
-            "body": adf_to_text(fields.get("description")),
-            "application": components[0] if components else "",
-            "environment": "prod",
-            "channel": "jira",
-            "reporter": (fields.get("reporter") or {}).get("emailAddress") or "",
-            "attachments": [],
-            "raw": {
-                "status": (fields.get("status") or {}).get("name", ""),
-                "priority": (fields.get("priority") or {}).get("name", ""),
-                "labels": fields.get("labels") or [],
-                "issuetype": (fields.get("issuetype") or {}).get("name", ""),
-            },
-            "updated_at": fields.get("updated") or "",
-        }
+        return [issue_to_ticket_dict(issue) for issue in issues]
 
     # --- write-back ----------------------------------------------------------
     #
@@ -258,6 +237,58 @@ class JiraSource(TicketSource):
 # post a prose rationale as a comment. Not a general ADF renderer; tables, code
 # blocks and mentions in a real ticket description will lose their formatting
 # (still get their text extracted, just flattened).
+
+
+def who(user_obj: dict | None) -> str:
+    """Best available identifier for a Jira user object (reporter/assignee/etc).
+
+    Jira Cloud withholds `emailAddress` from most API responses by default (a
+    GDPR-driven privacy setting, on regardless of plan) — verified against the
+    real board: reporter/assignee came back with displayName + accountId only,
+    no email. displayName is the identifier that is actually present.
+
+    Module-level, not a method, so both JiraSource._to_ticket_dict() (the poller
+    path) and api.py's webhook route (a second, independent ingestion path) call
+    the same extraction logic rather than two copies that can drift apart — which
+    is exactly what happened the first time: the webhook route built its raw
+    ticket dict by hand and simply had no reporter/assignee keys at all.
+    """
+    if not user_obj:
+        return ""
+    return user_obj.get("emailAddress") or user_obj.get("displayName") or ""
+
+
+def issue_to_ticket_dict(issue: dict) -> dict[str, Any]:
+    """The one place a raw Jira issue payload becomes our raw-ticket dict shape.
+
+    Called from two independent places — JiraSource.fetch_since() (the poller
+    path) and api.py's POST /integrations/webhook (Jira Automation's push path).
+    Module-level and stateless on purpose: those two call sites previously built
+    this dict by hand, separately, and drifted — the webhook route was missing
+    reporter/assignee entirely and hardcoded application="" instead of reading
+    components. One function, both paths, can't drift apart again.
+    """
+    fields = issue.get("fields", {}) or {}
+    components = [c.get("name", "") for c in (fields.get("components") or [])]
+    return {
+        "external_id": issue.get("key", ""),
+        "source": "jira",
+        "title": fields.get("summary") or "",
+        "body": adf_to_text(fields.get("description")),
+        "application": components[0] if components else "",
+        "environment": "prod",
+        "channel": "jira",
+        "reporter": who(fields.get("reporter")),
+        "assignee": who(fields.get("assignee")),
+        "attachments": [],
+        "raw": {
+            "status": (fields.get("status") or {}).get("name", ""),
+            "priority": (fields.get("priority") or {}).get("name", ""),
+            "labels": fields.get("labels") or [],
+            "issuetype": (fields.get("issuetype") or {}).get("name", ""),
+        },
+        "updated_at": fields.get("updated") or "",
+    }
 
 
 def adf_to_text(adf: dict | str | None) -> str:

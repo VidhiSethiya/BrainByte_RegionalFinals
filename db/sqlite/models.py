@@ -257,6 +257,12 @@ class Ticket(Base):
     application = Column(String, default="")
     environment = Column(String, default="prod")  # prod | uat | dev
     channel = Column(String, default="")
+    # Source-system identity, not TicketSphere identity — a Jira email/display
+    # name or a synthetic placeholder, never one of our own User rows. Additive
+    # column per .claude/plans/INTEGRATION.md's no-migration rule; see
+    # integrations/jira.py::_to_ticket_dict for where these are populated.
+    reporter = Column(String, default="")
+    assignee = Column(String, default="")
     category = Column(String, default="")
     subcategory = Column(String, default="")
     severity = Column(String, default="")  # S1–S4
@@ -288,6 +294,8 @@ class Ticket(Base):
             "application": self.application,
             "environment": self.environment,
             "channel": self.channel,
+            "reporter": self.reporter,
+            "assignee": self.assignee,
             "category": self.category,
             "subcategory": self.subcategory,
             "severity": self.severity,

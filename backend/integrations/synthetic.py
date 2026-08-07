@@ -71,6 +71,7 @@ def _normalize(data: dict[str, Any]) -> dict[str, Any]:
         "environment": str(data.get("environment") or "prod"),
         "channel": str(data.get("channel") or "synthetic"),
         "reporter": str(data.get("reporter") or ""),
+        "assignee": str(data.get("assignee") or ""),
         "attachments": list(data.get("attachments") or []),
         "raw": data,
         "updated_at": str(data.get("updated_at") or data.get("created_at") or ""),
