@@ -57,6 +57,7 @@ import {
   axisProps,
   legendProps,
   tooltipProps,
+  useChartInteraction,
 } from "../components/chartTheme";
 import DecisionDrawer from "../components/DecisionDrawer";
 import SeverityTag, {
@@ -132,6 +133,12 @@ export default function Control() {
   const closeDrawer = useUiStore((state) => state.closeDrawer);
 
   const [syncActive, setSyncActive] = useState(false);
+
+  const pieIx = useChartInteraction();
+  const utilIx = useChartInteraction();
+  const ageIx = useChartInteraction();
+  const throughputIx = useChartInteraction();
+  const categoryIx = useChartInteraction();
 
   const analytics = useQuery({
     queryKey: ["triage-analytics"],
@@ -445,10 +452,18 @@ export default function Control() {
                 innerRadius={52}
                 outerRadius={88}
                 paddingAngle={2}
+                cursor="pointer"
+                onMouseEnter={pieIx.onMouseEnter}
+                onMouseLeave={pieIx.onMouseLeave}
+                onClick={pieIx.onClick}
                 {...ANIMATION}
               >
-                {priorityPie.map((slice) => (
-                  <Cell key={slice.name} fill={PRIORITY_COLORS[slice.name] ?? SERIES[0]} />
+                {priorityPie.map((slice, index) => (
+                  <Cell
+                    key={slice.name}
+                    fill={pieIx.fillFor(PRIORITY_COLORS[slice.name] ?? SERIES[0], index)}
+                    style={{ cursor: "pointer" }}
+                  />
                 ))}
               </Pie>
               <ReTooltip {...tooltipProps} />
@@ -470,7 +485,20 @@ export default function Control() {
                   return [`${value}% (${row?.open ?? 0}/${row?.capacity ?? 0} open)`, "Utilization"];
                 }}
               />
-              <Bar dataKey="utilization" name="utilization" fill={SERIES[0]} radius={[0, 4, 4, 0]} {...animationFor(0)} />
+              <Bar
+                dataKey="utilization"
+                name="utilization"
+                radius={[0, 4, 4, 0]}
+                cursor="pointer"
+                onMouseEnter={utilIx.onMouseEnter}
+                onMouseLeave={utilIx.onMouseLeave}
+                onClick={utilIx.onClick}
+                {...animationFor(0)}
+              >
+                {teamUtilization.map((row, index) => (
+                  <Cell key={row.team} fill={utilIx.fillFor(SERIES[0], index)} style={{ cursor: "pointer" }} />
+                ))}
+              </Bar>
             </BarChart>
           </ChartCard>
         </Col>
@@ -482,7 +510,20 @@ export default function Control() {
               <XAxis type="number" allowDecimals={false} {...axisProps} />
               <YAxis type="category" dataKey="team" width={64} {...axisProps} />
               <ReTooltip {...tooltipProps} />
-              <Bar dataKey="oldest_hours" name="hours" fill={SERIES[2]} radius={[0, 4, 4, 0]} {...animationFor(0)} />
+              <Bar
+                dataKey="oldest_hours"
+                name="hours"
+                radius={[0, 4, 4, 0]}
+                cursor="pointer"
+                onMouseEnter={ageIx.onMouseEnter}
+                onMouseLeave={ageIx.onMouseLeave}
+                onClick={ageIx.onClick}
+                {...animationFor(0)}
+              >
+                {teamUtilization.map((row, index) => (
+                  <Cell key={row.team} fill={ageIx.fillFor(SERIES[2], index)} style={{ cursor: "pointer" }} />
+                ))}
+              </Bar>
             </BarChart>
           </ChartCard>
         </Col>
@@ -499,20 +540,38 @@ export default function Control() {
                 type="monotone"
                 dataKey="triaged"
                 name="triaged"
-                stroke={SERIES[0]}
-                fill={SERIES[0]}
+                stroke={throughputIx.seriesFill(SERIES[0], "triaged")}
+                fill={throughputIx.seriesFill(SERIES[0], "triaged")}
                 fillOpacity={0.18}
                 strokeWidth={2}
+                style={{ cursor: "pointer" }}
+                activeDot={{
+                  r: 5,
+                  cursor: "pointer",
+                  onClick: () => throughputIx.onSeriesClick("triaged"),
+                }}
+                onMouseEnter={() => throughputIx.onSeriesEnter("triaged")}
+                onMouseLeave={throughputIx.onSeriesLeave}
+                onClick={() => throughputIx.onSeriesClick("triaged")}
                 {...animationFor(0)}
               />
               <Area
                 type="monotone"
                 dataKey="overridden"
                 name="overridden"
-                stroke={SERIES[2]}
-                fill={SERIES[2]}
+                stroke={throughputIx.seriesFill(SERIES[2], "overridden")}
+                fill={throughputIx.seriesFill(SERIES[2], "overridden")}
                 fillOpacity={0.22}
                 strokeWidth={2}
+                style={{ cursor: "pointer" }}
+                activeDot={{
+                  r: 5,
+                  cursor: "pointer",
+                  onClick: () => throughputIx.onSeriesClick("overridden"),
+                }}
+                onMouseEnter={() => throughputIx.onSeriesEnter("overridden")}
+                onMouseLeave={throughputIx.onSeriesLeave}
+                onClick={() => throughputIx.onSeriesClick("overridden")}
                 {...animationFor(1)}
               />
             </AreaChart>
@@ -526,7 +585,24 @@ export default function Control() {
               <XAxis type="number" allowDecimals={false} {...axisProps} />
               <YAxis type="category" dataKey="category" width={110} {...axisProps} />
               <ReTooltip {...tooltipProps} />
-              <Bar dataKey="count" name="tickets" fill={SERIES[3]} radius={[0, 4, 4, 0]} {...animationFor(0)} />
+              <Bar
+                dataKey="count"
+                name="tickets"
+                radius={[0, 4, 4, 0]}
+                cursor="pointer"
+                onMouseEnter={categoryIx.onMouseEnter}
+                onMouseLeave={categoryIx.onMouseLeave}
+                onClick={categoryIx.onClick}
+                {...animationFor(0)}
+              >
+                {categoryMix.map((row, index) => (
+                  <Cell
+                    key={row.category}
+                    fill={categoryIx.fillFor(SERIES[3], index)}
+                    style={{ cursor: "pointer" }}
+                  />
+                ))}
+              </Bar>
             </BarChart>
           </ChartCard>
         </Col>

@@ -490,9 +490,18 @@ h1 {
 }
 
 /* Charts animate their own series (Recharts `isAnimationActive`); this is the
-   card they sit in. */
+   card they sit in. Interactive shapes use pointer + grey hover/click in JS. */
 .chart-card .recharts-wrapper {
   animation: ts-fade-in var(--dur-base) var(--ease-out) both;
+}
+
+.chart-card .recharts-sector,
+.chart-card .recharts-bar-rectangle,
+.chart-card .recharts-area-area,
+.chart-card .recharts-area-curve,
+.chart-card .recharts-line-curve,
+.chart-card .recharts-pie-sector {
+  cursor: pointer;
 }
 
 @keyframes ts-fade-in {
