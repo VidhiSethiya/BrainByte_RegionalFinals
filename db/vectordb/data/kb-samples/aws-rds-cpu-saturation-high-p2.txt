@@ -1,0 +1,37 @@
+AWS RDS CPU saturation - High (P2) database latency
+=====================================================
+
+Team: aws
+Use for: Incidents where AWS RDS CPU is saturated and apps see database or API latency
+Jira Priority: High (P2)
+
+## Symptom
+- App or API latency up; timeouts; connection pool pressure
+- RDS CPUUtilization sustained high (often over 80-90%)
+- Slow queries, lock waits, too many connections
+- Ticket text often says: RDS CPU, database latency, DB slow, saturation, High/P2
+
+## Diagnosis
+1. Confirm RDS id, engine, region, environment (prod/uat)
+2. CloudWatch: CPUUtilization, FreeableMemory, DatabaseConnections, Read/WriteLatency, DiskQueueDepth
+3. Performance Insights / Top SQL - find top CPU queries
+4. Correlate with deploys, migrations, batch jobs, traffic spikes, failover
+5. Check Multi-AZ / replica lag before blaming a single query
+
+## Fix
+Do not reboot production RDS first.
+
+1. Stabilize: shed reads to replicas if available; pause heavy batch jobs on primary
+2. Throttle or kill clear runaway sessions (with approval if needed)
+3. Mitigate hot query (index) or roll back the last deploy if timing matches
+4. Scale only if undersized: larger instance class or read replicas; record the incident id
+5. Verify: CPU down, p95 recovering, pools healthy; comment on the ticket with Top SQL summary
+
+## Escalate
+- Highest if primary is unresponsive or data is at risk - page aws on-call
+- High (P2) still saturated after 30 minutes of kill/throttle - escalate to aws on-call
+- Failover loops or storage full - use the RDS failover runbook and treat as Highest
+
+## Notes for TicketSphere
+Route to aws. Prefer Priority High when prod is degraded but not fully down.
+First action: Performance Insights Top SQL, then throttle/kill the top CPU session if approved.
