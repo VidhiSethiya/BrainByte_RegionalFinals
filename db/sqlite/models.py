@@ -373,13 +373,28 @@ class SyncState(Base):
     updated_at = Column(DateTime, default=_now, onupdate=_now)
 
 
-engine = create_engine(settings.DATABASE_URL, future=True)
+engine = create_engine(
+    settings.DATABASE_URL,
+    future=True,
+    # integrations/poller.py now triages a sync batch's tickets concurrently
+    # (ai.llm.parallel_map, bounded by MAX_PARALLEL_WORKERS) — several threads
+    # can commit around the same moment. SQLite's default rollback-journal mode
+    # only ever allows one writer at a time and gives up after the sqlite3
+    # driver's default 5s busy-wait, which is tight enough to occasionally
+    # surface as "database is locked" under that load. WAL lets readers and the
+    # one active writer coexist, and the longer timeout below is the cheap
+    # remaining insurance for the rare moment two commits still line up.
+    connect_args={"timeout": 30} if settings.DATABASE_URL.startswith("sqlite") else {},
+)
+if settings.DATABASE_URL.startswith("sqlite"):
+    with engine.connect() as _conn:
+        _conn.exec_driver_sql("PRAGMA journal_mode=WAL")
 SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
 
 
 _DEMO_USERS = [
     ("admin", "admin123", "admin", ["all"]),
-    ("manager", "manager123", "manager", ["all"]),
+    ("manager", "manager123", "admin", ["all"]),
     ("ops1", "ops123", "engineer", ["ops"]),
     ("azure1", "azure123", "engineer", ["azure"]),
     ("aws1", "aws123", "engineer", ["aws"]),

@@ -18,7 +18,7 @@ langgraph>=0.2.60
 httpx>=0.27.2              # shared client; also how TLS verification is disabled
 
 # --- retrieval ---
-chromadb>=0.5.20
+chromadb>=1.0.9,<1.1.0
 
 # --- documents (text + pdf + image) ---
 pymupdf>=1.25.0

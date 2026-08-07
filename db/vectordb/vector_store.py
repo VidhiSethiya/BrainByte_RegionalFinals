@@ -49,7 +49,17 @@ def _collection():
     global _client
     if _client is None:
         settings.ensure_dirs()
-        _client = chromadb.PersistentClient(path=str(settings.CHROMA_PERSIST_DIR))
+        # anonymized_telemetry=False: without it, Chroma's own posthog client tries
+        # to phone home on every process start and — on a network that blocks it
+        # (as here, DISABLE_SSL_VERIFY-style corporate proxy) — burns several
+        # seconds per attempt in exponential-backoff retries before giving up.
+        # That cost was invisible while the store was also panicking on every call
+        # (client.py::_validate_tenant_database) and masked by that larger latency;
+        # worth killing now that retrieval actually runs.
+        _client = chromadb.PersistentClient(
+            path=str(settings.CHROMA_PERSIST_DIR),
+            settings=chromadb.config.Settings(anonymized_telemetry=False),
+        )
     return _client.get_or_create_collection(
         name=settings.CHROMA_COLLECTION,
         metadata={"hnsw:space": "cosine"},

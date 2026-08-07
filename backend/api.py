@@ -58,6 +58,7 @@ from observability.telemetry import log, recent_traces, usage_summary
 from rag import rag_indexer
 from rag.rag_retriever import retrieve
 from rag.schemas import (
+    BulkApproveRequest,
     ChatRequest,
     FeedbackRequest,
     LoginRequest,
@@ -825,43 +826,49 @@ def override_ticket(ticket_id: str):
     return ok(payload_out)
 
 
-@api_bp.post("/tickets/<ticket_id>/approve")
-@require_auth
-@require_role("admin", "manager")
-def approve_ticket(ticket_id: str):
-    """The human-in-the-loop gate's other half. Sets status to "approved" *then*
-    calls tools.ticket_update — the tool itself re-checks that status before
-    writing anything, so this route cannot accidentally bypass the gate by
-    calling the ticket source directly.
+def _approve_one(ticket_id: str, user: dict) -> dict:
+    """Shared core of the human-in-the-loop approve gate — used by both the
+    single-ticket route below and the admin-only bulk route. Sets status to
+    "approved" *then* calls tools.ticket_update — the tool itself re-checks
+    that status before writing anything, so neither caller can accidentally
+    bypass the gate by calling the ticket source directly.
 
     Adapter calls use Ticket.external_id (Jira key), never the SQLite UUID.
 
-    Refuses tickets that never finished triage (empty severity/team) — approving
-    those previously wrote blank Jira comments like
+    Refuses tickets that never finished triage (empty severity/team) —
+    approving those previously wrote blank Jira comments like
     "TicketSphere:  ·  · priority 0 · confidence 0%".
+
+    Never raises: returns {"ok": False, "code", "message", "status"} on
+    failure so a bulk loop can keep going past one bad ticket, or
+    {"ok": True, "ticket": row.to_dict()} on success.
     """
     with SessionLocal() as s:
         row = s.get(Ticket, ticket_id)
         if not row:
-            return fail("not_found", "Ticket not found", 404)
+            return {"ok": False, "code": "not_found", "message": "Ticket not found", "status": 404}
 
         from integrations.jira import normalize_priority
 
         severity = normalize_priority((row.severity or "").strip())
         assigned_team = (row.assigned_team or "").strip()
         if not severity or not assigned_team:
-            return fail(
-                "not_ready",
-                "Ticket has no triage decision yet (priority/team empty). "
-                "Wait for a successful triage or re-sync before approving.",
-                409,
-            )
+            return {
+                "ok": False,
+                "code": "not_ready",
+                "message": (
+                    "Ticket has no triage decision yet (priority/team empty). "
+                    "Wait for a successful triage or re-sync before approving."
+                ),
+                "status": 409,
+            }
         if row.status == "failed":
-            return fail(
-                "not_ready",
-                "Ticket triage failed — re-run sync/poll before approving.",
-                409,
-            )
+            return {
+                "ok": False,
+                "code": "not_ready",
+                "message": "Ticket triage failed — re-run sync/poll before approving.",
+                "status": 409,
+            }
 
         row.severity = severity
         row.status = "approved"
@@ -900,13 +907,13 @@ def approve_ticket(ticket_id: str):
             "ticket_update",
             ticket_id,
             fields,
-            user=g.user,
+            user=user,
             ticket_status="approved",
             confidence=confidence,
             severity=severity,
         )
     except ToolDenied as exc:
-        return fail("tool_denied", str(exc), 403)
+        return {"ok": False, "code": "tool_denied", "message": str(exc), "status": 403}
 
     if not external_id:
         log.warning(
@@ -919,7 +926,7 @@ def approve_ticket(ticket_id: str):
             comment = (
                 f"TicketSphere: {severity} · {assigned_team} · "
                 f"confidence {confidence:.0%}. "
-                f"Approved by {g.user.get('username', g.user['id'])}."
+                f"Approved by {user.get('username', user.get('id'))}."
             )
             if first_action:
                 comment += f"\n\nRecommended resolution: {first_action[:600]}"
@@ -939,9 +946,73 @@ def approve_ticket(ticket_id: str):
         row.needs_human = False
         s.commit()
         s.refresh(row)
+        ticket_dict = row.to_dict()
 
-    audit.record("ticket.approved", user_id=g.user["id"], resource=ticket_id, **result)
-    return ok(row.to_dict())
+    audit.record(
+        "ticket.approved",
+        user_id=user["id"],
+        resource=ticket_id,
+        **(result if isinstance(result, dict) else {}),
+    )
+    return {"ok": True, "ticket": ticket_dict}
+
+
+@api_bp.post("/tickets/<ticket_id>/approve")
+@require_auth
+@require_role("admin", "manager")
+def approve_ticket(ticket_id: str):
+    outcome = _approve_one(ticket_id, g.user)
+    if not outcome["ok"]:
+        return fail(outcome["code"], outcome["message"], outcome["status"])
+    return ok(outcome["ticket"])
+
+
+@api_bp.post("/tickets/bulk-approve")
+@require_auth
+@require_role("admin")
+@rate_limit(per_minute=10)
+def bulk_approve_tickets():
+    """The chat-driven "get me all P1 issues" -> "approve and route them"
+    flow. Admin-only per the build-day requirement (deliberately narrower
+    than the single-ticket /approve above, which still also allows
+    role=="manager" for backward compat) — the ids come from a chat answer
+    (chatbot/context_manager.py::fetch_approvable_tickets lists candidates,
+    it never writes), but a human still has to click the button that POSTs
+    here, and this route re-checks role and re-runs the same readiness gate
+    per ticket via _approve_one. One bad ticket in the batch does not abort
+    the rest; each gets its own result and its own audit.record call.
+    """
+    payload, error = validate_request(request.get_json(silent=True), BulkApproveRequest)
+    if error:
+        return fail("validation_error", error, 422)
+
+    results = []
+    for ticket_id in payload.ticket_ids:
+        outcome = _approve_one(ticket_id, g.user)
+        if outcome["ok"]:
+            results.append({"ticket_id": ticket_id, "ok": True, "ticket": outcome["ticket"]})
+        else:
+            results.append(
+                {
+                    "ticket_id": ticket_id,
+                    "ok": False,
+                    "code": outcome["code"],
+                    "message": outcome["message"],
+                }
+            )
+
+    approved = sum(1 for r in results if r["ok"])
+    audit.record(
+        "ticket.bulk_approved",
+        user_id=g.user["id"],
+        resource=",".join(payload.ticket_ids),
+        approved=approved,
+        failed=len(results) - approved,
+    )
+    return ok(
+        results,
+        {"approved": approved, "failed": len(results) - approved, "total": len(results)},
+    )
 
 
 # --- integrations -------------------------------------------------------------

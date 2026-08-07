@@ -162,6 +162,14 @@ class ChatResponse(BaseModel):
     latency_ms: int = 0
     total_tokens: int = 0
     trace_id: str = ""
+    # Populated only for role=="admin" on a ticket-SQL answer (e.g. "get me all P1
+    # issues") when at least one matched ticket still needs approval — the ids the
+    # chat's admin-only "Bulk approve & route" button sends to
+    # POST /tickets/bulk-approve. Never populated for any other role: the LLM only
+    # ever lists candidates, it never approves anything itself (see
+    # chatbot/context_manager.py::fetch_approvable_tickets and
+    # api.py::bulk_approve_tickets).
+    actionable_ticket_ids: list[str] = Field(default_factory=list)
 
 
 class FeedbackRequest(BaseModel):
@@ -268,6 +276,14 @@ class TicketIngestRequest(BaseModel):
     attachments: list[str] = Field(default_factory=list)
     reporter: str = ""
     raw: dict[str, Any] = Field(default_factory=dict)
+
+
+class BulkApproveRequest(BaseModel):
+    """Admin-only bulk version of the single-ticket approve gate. Capped at 50 —
+    this is a chat-driven convenience action on a handful of listed tickets, not
+    a mass-migration tool."""
+
+    ticket_ids: list[str] = Field(min_length=1, max_length=50)
 
 
 class OverrideRequest(BaseModel):

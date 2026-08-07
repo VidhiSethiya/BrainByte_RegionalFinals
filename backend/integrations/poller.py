@@ -12,6 +12,7 @@ consumer, per `.claude/plans/BLUEPRINT.md` §12.
 from __future__ import annotations
 
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 from config import settings
@@ -88,12 +89,59 @@ def _dead_letter_row(raw: dict[str, Any], source_name: str, exc: BaseException) 
         log.error("poll: dead-letter update failed for %s: %s", external_id, db_exc)
 
 
+def _triage_one(raw: dict[str, Any], source_name: str) -> tuple[dict[str, Any], str]:
+    """One ticket's worth of `ingest_and_triage`, run inside `_TICKET_POOL`.
+
+    Every exception is caught *here* rather than left to propagate — a bare
+    ThreadPoolExecutor future's exception would otherwise only surface when
+    something calls .result(), and by then the external_id context needed to
+    dead-letter the row is gone. Returns (raw, status) where status is
+    "triaged" or "failed"; never raises.
+    """
+    from ai.agents import ingest_and_triage
+
+    try:
+        row, _state = ingest_and_triage(raw, _SYSTEM_USER)
+        return raw, ("failed" if row.status == "failed" else "triaged")
+    except Exception as exc:  # noqa: BLE001 - one bad ticket must not stop the batch
+        log.error("poll: ingest_and_triage failed for %s: %s", raw.get("external_id"), exc)
+        _dead_letter_row(raw, source_name, exc)
+        return raw, "failed"
+
+
+# Deliberately its own pool, NOT ai.llm.parallel_map's shared _FANOUT_POOL.
+# ingest_and_triage()'s own triage graph already calls parallel_map internally
+# for leaf-level fan-out (rag_retriever.py's multi-query retrieval, embeddings.py's
+# batch embedding, output_guard.py's parallel guardrail checks, anonymizer.py's
+# PII pass) — all against that same _FANOUT_POOL. Submitting *tickets* to that
+# same bounded pool would nest fan-out inside fan-out: with MAX_PARALLEL_WORKERS
+# tickets each occupying one _FANOUT_POOL worker and each then blocking on its
+# own inner parallel_map call for a worker from the very same (now fully busy)
+# pool, no inner task can ever start — a real deadlock, hit and confirmed live
+# in this session before this pool was split out. A second, independent
+# ThreadPoolExecutor has no such shared-resource cycle with the first.
+_TICKET_POOL = ThreadPoolExecutor(
+    max_workers=settings.MAX_PARALLEL_WORKERS, thread_name_prefix="ticket-triage"
+)
+
+
 def poll_once() -> dict[str, Any]:
     """Fetch everything new since the last watermark and triage it. Safe to call
     concurrently with the background loop — the lock serialises actual polls so
     a manual POST /integrations/sync and the timer never race and never
-    double-advance the watermark."""
-    from ai.agents import ingest_and_triage
+    double-advance the watermark.
+
+    Tickets in one batch are triaged in parallel via `_TICKET_POOL`, bounded by
+    MAX_PARALLEL_WORKERS — each ticket's triage graph is 4-6 sequential LLM
+    calls, so a 50-ticket "Sync Now" running them one ticket at a time was the
+    dominant cost in the "syncing takes several minutes" complaint. Tickets are
+    independent (no shared mutable state beyond each ticket's own SQLite row
+    and the shared audit/telemetry logs, both already lock-safe), so fanning out
+    is safe, not just faster — see _TICKET_POOL's docstring for why this is a
+    dedicated pool rather than ai.llm.parallel_map.
+    """
+    from concurrent.futures import TimeoutError as _FuturesTimeout
+
     from ai.tools import get_ticket_source
 
     global _watermark, _watermark_source
@@ -123,18 +171,22 @@ def poll_once() -> dict[str, Any]:
         triaged = 0
         failed = 0
         latest_watermark = _watermark
-        for raw in raw_tickets:
+        # A ticket's several sequential LLM calls can legitimately take longer
+        # than one call's timeout, so the per-ticket budget here is wider than
+        # a single LLM_TIMEOUT_SECONDS.
+        per_ticket_timeout = settings.LLM_TIMEOUT_SECONDS * 6
+        futures = [_TICKET_POOL.submit(_triage_one, raw, source.name) for raw in raw_tickets]
+        for raw, future in zip(raw_tickets, futures):
             try:
-                row, _state = ingest_and_triage(raw, _SYSTEM_USER)
-                if row.status == "failed":
+                _, status = future.result(timeout=per_ticket_timeout)
+                if status == "failed":
                     failed += 1
                 else:
                     triaged += 1
-            except Exception as exc:  # noqa: BLE001 - one bad ticket must not stop the batch
+            except _FuturesTimeout:
+                future.cancel()
                 failed += 1
-                log.error("poll: ingest_and_triage failed for %s: %s",
-                           raw.get("external_id"), exc)
-                _dead_letter_row(raw, source.name, exc)
+                _dead_letter_row(raw, source.name, TimeoutError("triage exceeded per-ticket timeout"))
 
             updated = raw.get("updated_at") or ""
             if updated and (latest_watermark is None or updated > latest_watermark):

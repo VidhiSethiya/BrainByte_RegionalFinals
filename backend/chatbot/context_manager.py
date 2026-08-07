@@ -16,7 +16,7 @@ from config import settings
 from db.sqlite.models import ChatMessage, SessionLocal
 from observability.telemetry import log
 from rag.rag_retriever import build_context
-from rag.schemas import RetrievedChunk
+from rag.schemas import RetrievedChunk, normalize_severity
 from sqlalchemy import text
 
 MAX_CONTEXT_CHARS = 6000
@@ -251,24 +251,32 @@ def looks_like_ticket_query(text: str) -> bool:
     return False
 
 
-def fetch_ticket_context(question: str, limit: int = 12) -> str:
-    """Pull live ticket rows from SQLite to ground ticket Q&A.
-
-    Uses raw SQL against columns that exist in app.db (avoids ORM drift when
-    models.py gains columns the local SQLite file does not have yet).
-    """
+def _build_ticket_where(
+    question: str, limit: int
+) -> tuple[str, dict[str, object], list[str], bool, bool]:
+    """Shared filter parsing behind both fetch_ticket_context (narration) and
+    fetch_approvable_tickets (the chat bulk-approve action) — one parse of
+    "P1", "azure", "INC-123" etc. out of the free-text question, reused for
+    both queries so the two never drift apart on what "matches"."""
     q = question or ""
     ids = [m.group(1).upper().replace("_", "-") for m in _TICKET_ID_RE.finditer(q)]
     teams = [m.group(1).lower() for m in _TEAM_RE.finditer(q)]
+    # tickets.severity stores Jira Priority names (Highest/High/Medium/Low), never
+    # the S1-S4/P1-P4 shorthand a user actually types — normalize_severity() maps
+    # "P1"/"S1"/"sev1" onto "Highest" etc. so this filter matches real rows.
     sev_raw = [m.group(1).upper().replace(" ", "") for m in _SEVERITY_RE.finditer(q)]
     severities: list[str] = []
     for s in sev_raw:
-        if s.startswith("SEV"):
-            severities.append("S" + s[-1])
-        elif s.startswith("P"):
-            severities.append("S" + s[-1])
-        elif s.startswith("S"):
-            severities.append(s[:2])
+        code = s
+        if code.startswith("SEV"):
+            code = "S" + code[-1]
+        elif code.startswith("P"):
+            code = "S" + code[-1]
+        elif code.startswith("S"):
+            code = code[:2]
+        jira_name = normalize_severity(code)
+        if jira_name:
+            severities.append(jira_name.upper())
 
     want_count = bool(re.search(r"\b(how many|count|number of)\b", q, re.I))
     where: list[str] = ["1=1"]
@@ -297,7 +305,54 @@ def fetch_ticket_context(question: str, limit: int = 12) -> str:
             params[f"{key}_exact"] = tid
         where.append("(" + " OR ".join(id_clauses) + ")")
 
-    where_sql = " AND ".join(where)
+    has_filters = bool(ids or teams or severities)
+    return " AND ".join(where), params, ids, want_count, has_filters
+
+
+def fetch_approvable_tickets(question: str, limit: int = 20) -> list[dict]:
+    """Same filters as fetch_ticket_context, narrowed to tickets that are
+    actually ready for POST /tickets/bulk-approve: triage finished (severity +
+    team set) and not already approved/routed/resolved/synced/failed.
+
+    This is the read side of the chat bulk-approve flow — it only ever lists
+    candidates. Nothing here writes; the admin still has to click the button
+    that calls bulk_approve_tickets, and that route (not this function)
+    re-checks role and re-runs the same "is this ready" gate per ticket."""
+    where_sql, params, _ids, _want_count, _has_filters = _build_ticket_where(question, limit)
+    try:
+        with SessionLocal() as s:
+            rows = s.execute(
+                text(
+                    f"SELECT id, external_id, title, severity, assigned_team, status "
+                    f"FROM tickets WHERE {where_sql} "
+                    f"AND coalesce(severity,'') != '' AND coalesce(assigned_team,'') != '' "
+                    f"AND status NOT IN ('approved','routed','resolved','synced','failed') "
+                    f"ORDER BY updated_at DESC LIMIT :limit"
+                ),
+                params,
+            ).fetchall()
+    except Exception as exc:  # noqa: BLE001 - never take down the chat turn
+        log.warning("fetch_approvable_tickets failed: %s", exc)
+        return []
+    return [
+        {
+            "id": tid,
+            "external_id": ext or "",
+            "title": title or "",
+            "severity": sev or "",
+            "assigned_team": team or "",
+        }
+        for tid, ext, title, sev, team, _status in rows
+    ]
+
+
+def fetch_ticket_context(question: str, limit: int = 12) -> str:
+    """Pull live ticket rows from SQLite to ground ticket Q&A.
+
+    Uses raw SQL against columns that exist in app.db (avoids ORM drift when
+    models.py gains columns the local SQLite file does not have yet).
+    """
+    where_sql, params, ids, want_count, has_filters = _build_ticket_where(question, limit)
     lines: list[str] = []
 
     try:
@@ -334,7 +389,7 @@ def fetch_ticket_context(question: str, limit: int = 12) -> str:
                     ),
                     params,
                 ).fetchall()
-                if not rows and not ids and not teams and not severities:
+                if not rows and not has_filters:
                     rows = s.execute(
                         text(
                             "SELECT external_id, id, assigned_team, severity, status, title, "

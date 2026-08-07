@@ -1,4 +1,5 @@
-import { MessageOutlined, ReloadOutlined, SendOutlined } from "@ant-design/icons";
+import { CheckCircleOutlined, MessageOutlined, ReloadOutlined, SendOutlined } from "@ant-design/icons";
+import { useQuery } from "@tanstack/react-query";
 import {
   App,
   Button,
@@ -16,7 +17,7 @@ import {
 import { useEffect, useRef, useState } from "react";
 import Markdown from "react-markdown";
 
-import { api, type Citation } from "../api/client";
+import { api, meQueryKey, type Citation } from "../api/client";
 import { GroundednessTag } from "./SeverityTag";
 import VoiceButton from "./VoiceButton";
 
@@ -28,6 +29,9 @@ interface Turn {
   groundedness?: number | null;
   /** True when the number came from the SQL tool rather than the model. */
   countedFromDatabase?: boolean;
+  /** Admin-only: ticket ids this answer listed that are still ready for
+   * POST /tickets/bulk-approve. Cleared once acted on. */
+  actionableTicketIds?: string[];
 }
 
 /**
@@ -43,7 +47,17 @@ export default function ChatbotDrawer() {
   const [turns, setTurns] = useState<Turn[]>([]);
   const [draft, setDraft] = useState("");
   const [pending, setPending] = useState(false);
+  const [approving, setApproving] = useState(false);
   const bottom = useRef<HTMLDivElement>(null);
+
+  // Admin-only, same gate as the Assistant page and enforced server-side by
+  // POST /tickets/bulk-approve (@require_role("admin")).
+  const { data: me } = useQuery({
+    queryKey: meQueryKey(),
+    queryFn: () => api.me().then((r) => r.data),
+    staleTime: 5 * 60_000,
+  });
+  const isAdmin = me?.role === "admin";
 
   // Replay the pinned thread on first open so a page reload does not lose it.
   useEffect(() => {
@@ -81,6 +95,7 @@ export default function ChatbotDrawer() {
           blocked: data.blocked,
           groundedness: data.groundedness,
           countedFromDatabase: (data as { tool_used?: string | null }).tool_used === "ticket_stats",
+          actionableTicketIds: data.actionable_ticket_ids?.length ? data.actionable_ticket_ids : undefined,
         },
       ]);
     } catch (error: any) {
@@ -88,6 +103,27 @@ export default function ChatbotDrawer() {
     } finally {
       setPending(false);
       requestAnimationFrame(() => bottom.current?.scrollIntoView({ behavior: "smooth" }));
+    }
+  }
+
+  async function bulkApprove(turnIndex: number, ticketIds: string[]) {
+    setApproving(true);
+    try {
+      const { data, meta } = await api.bulkApprove(ticketIds);
+      const approved = (meta as { approved?: number })?.approved ?? data.filter((r) => r.ok).length;
+      const failed = ticketIds.length - approved;
+      toast.success(
+        failed
+          ? `Approved and routed ${approved} of ${ticketIds.length} ticket(s) — ${failed} could not be approved.`
+          : `Approved and routed ${approved} ticket(s).`
+      );
+      setTurns((prev) =>
+        prev.map((t, i) => (i === turnIndex ? { ...t, actionableTicketIds: undefined } : t))
+      );
+    } catch (error: any) {
+      toast.error(error.message ?? "Bulk approve failed");
+    } finally {
+      setApproving(false);
     }
   }
 
@@ -157,6 +193,20 @@ export default function ChatbotDrawer() {
                         Counted from the database, not generated
                       </Tag>
                     </Tooltip>
+                  )}
+
+                  {isAdmin && !!turn.actionableTicketIds?.length && (
+                    <Flex style={{ marginTop: 8 }}>
+                      <Button
+                        type="primary"
+                        size="small"
+                        icon={<CheckCircleOutlined />}
+                        loading={approving}
+                        onClick={() => bulkApprove(index, turn.actionableTicketIds!)}
+                      >
+                        Bulk approve &amp; route ({turn.actionableTicketIds.length})
+                      </Button>
+                    </Flex>
                   )}
 
                   {!!turn.citations?.length && (

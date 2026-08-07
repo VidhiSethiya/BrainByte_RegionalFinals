@@ -1,9 +1,10 @@
-import { DislikeOutlined, LikeOutlined, SendOutlined } from "@ant-design/icons";
+import { CheckCircleOutlined, DislikeOutlined, LikeOutlined, SendOutlined } from "@ant-design/icons";
+import { useQuery } from "@tanstack/react-query";
 import { App, Button, Card, Empty, Flex, Input, Skeleton, Space, Tag, Tooltip, Typography } from "antd";
 import { useRef, useState } from "react";
 import Markdown from "react-markdown";
 
-import { api, type ChatResponse, type Citation } from "../api/client";
+import { api, meQueryKey, type ChatResponse, type Citation } from "../api/client";
 import { GroundednessTag } from "../components/SeverityTag";
 import VoiceButton from "../components/VoiceButton";
 
@@ -18,6 +19,9 @@ interface Turn {
   blocked?: boolean;
   /** Set when the answer came from the deterministic SQL tool rather than the model. */
   countedFromDatabase?: boolean;
+  /** Admin-only: ticket ids this answer listed that are still ready for
+   * POST /tickets/bulk-approve. Cleared once acted on. */
+  actionableTicketIds?: string[];
 }
 
 const STARTERS = [
@@ -33,7 +37,18 @@ export default function Chat() {
   const [sessionId, setSessionId] = useState<string>();
   const [suggestions, setSuggestions] = useState<string[]>([]);
   const [pending, setPending] = useState(false);
+  const [approving, setApproving] = useState(false);
   const bottom = useRef<HTMLDivElement>(null);
+
+  // Bulk-approve is admin-only (CLAUDE.md build-day requirement) — the API
+  // enforces this too (POST /tickets/bulk-approve is @require_role("admin")),
+  // this is only so the button never appears for someone it would 403.
+  const { data: me } = useQuery({
+    queryKey: meQueryKey(),
+    queryFn: () => api.me().then((r) => r.data),
+    staleTime: 5 * 60_000,
+  });
+  const isAdmin = me?.role === "admin";
 
   async function send(text: string) {
     const question = text.trim();
@@ -74,8 +89,30 @@ export default function Chat() {
         tokens: data.total_tokens,
         blocked: data.blocked,
         countedFromDatabase: data.tool_used === "ticket_stats",
+        actionableTicketIds: data.actionable_ticket_ids?.length ? data.actionable_ticket_ids : undefined,
       },
     ]);
+  }
+
+  async function bulkApprove(turnIndex: number, ticketIds: string[]) {
+    setApproving(true);
+    try {
+      const { data, meta } = await api.bulkApprove(ticketIds);
+      const approved = (meta as { approved?: number })?.approved ?? data.filter((r) => r.ok).length;
+      const failed = ticketIds.length - approved;
+      toast.success(
+        failed
+          ? `Approved and routed ${approved} of ${ticketIds.length} ticket(s) — ${failed} could not be approved.`
+          : `Approved and routed ${approved} ticket(s).`
+      );
+      setTurns((prev) =>
+        prev.map((t, i) => (i === turnIndex ? { ...t, actionableTicketIds: undefined } : t))
+      );
+    } catch (error: any) {
+      toast.error(error.message ?? "Bulk approve failed");
+    } finally {
+      setApproving(false);
+    }
   }
 
   async function rate(messageId: string, rating: 1 | -1) {
@@ -142,6 +179,20 @@ export default function Chat() {
                           Counted from the database, not generated
                         </Tag>
                       </Tooltip>
+                    )}
+
+                    {isAdmin && !!turn.actionableTicketIds?.length && (
+                      <Flex style={{ marginTop: 8 }}>
+                        <Button
+                          type="primary"
+                          size="small"
+                          icon={<CheckCircleOutlined />}
+                          loading={approving}
+                          onClick={() => bulkApprove(index, turn.actionableTicketIds!)}
+                        >
+                          Bulk approve &amp; route ({turn.actionableTicketIds.length})
+                        </Button>
+                      </Flex>
                     )}
 
                     {!!turn.citations?.length && (

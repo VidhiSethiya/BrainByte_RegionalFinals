@@ -555,30 +555,52 @@ const TRACES = Array.from({ length: 15 }, (_, index) => ({
   ],
 }));
 
-function chatAnswer(question: string) {
+/** Tickets a P1/Highest-style question would surface that are still ready for
+ * the admin-only bulk-approve action — mirrors backend
+ * chatbot/context_manager.py::fetch_approvable_tickets (severity+team set,
+ * not already approved/routed/resolved/synced/failed). */
+function approvableForQuestion(question: string): TicketRow[] {
+  const wantsHighSeverity = /\bp1\b|\bs1\b|\bsev\s*1\b|highest\b/i.test(question);
+  if (!wantsHighSeverity) return [];
+  return TICKETS.filter(
+    (t) =>
+      t.severity === "Highest" &&
+      !!t.assigned_team &&
+      !["approved", "routed", "resolved", "synced", "failed"].includes(t.status)
+  );
+}
+
+function chatAnswer(question: string, user: MockUser = currentUser()) {
   const counted = /how many|count|number of/i.test(question);
   const blocked = /ignore (your )?(previous )?instructions|api key|password/i.test(question);
+  const approvable = blocked || user.role !== "admin" ? [] : approvableForQuestion(question);
+  const answer = blocked
+    ? "That request was blocked before it reached the model: it matches a prompt-injection pattern. Nothing was generated and nothing was sent to the ticket system."
+    : approvable.length
+      ? `Found **${approvable.length} P1 ticket(s)** still awaiting approval:\n\n` +
+        approvable.map((t) => `- ${t.external_id} · ${t.title} · team=${t.assigned_team}`).join("\n") +
+        "\n\nYou can bulk-approve and route all of these below."
+      : counted
+        ? "There are **7 S1 tickets** open this week: 3 on AWS, 2 on Azure, 1 on GCP and 1 on Ops."
+        : "Production payments-path incidents carry a 60-minute response target [C1]. The owning team is determined by the affected platform, and the runbook requires a human approval before a Sev-1 is routed [C2].";
   return {
     session_id: "s-mock-1",
     message_id: `m-${Math.random().toString(36).slice(2, 8)}`,
-    answer: blocked
-      ? "That request was blocked before it reached the model: it matches a prompt-injection pattern. Nothing was generated and nothing was sent to the ticket system."
-      : counted
-        ? "There are **7 S1 tickets** open this week: 3 on AWS, 2 on Azure, 1 on GCP and 1 on Ops."
-        : "Production payments-path incidents carry a 60-minute response target [C1]. The owning team is determined by the affected platform, and the runbook requires a human approval before a Sev-1 is routed [C2].",
-    citations: counted ? [] : EVIDENCE.slice(0, 2),
+    answer,
+    citations: counted || approvable.length ? [] : EVIDENCE.slice(0, 2),
     suggestions: [
       "Which team has the oldest open ticket?",
       "How many S1 tickets this week?",
       "What is the first action for an RDS failover loop?",
     ],
-    groundedness: blocked ? null : counted ? 1 : 0.86,
+    groundedness: blocked ? null : counted || approvable.length ? 1 : 0.86,
     blocked,
     blocked_reason: blocked ? "prompt_injection" : null,
     latency_ms: 2410,
     total_tokens: 1840,
     trace_id: "tr_mock",
     tool_used: counted ? "ticket_stats" : null,
+    actionable_ticket_ids: approvable.map((t) => t.id),
   };
 }
 
@@ -662,6 +684,21 @@ export async function mockResponse<T>(path: string, init: RequestInit = {}): Pro
     return ok({ processed: count, total_ms: count * 820, results });
   }
 
+  if (route === "/tickets/bulk-approve") {
+    const ids: string[] = Array.isArray(payload.ticket_ids) ? payload.ticket_ids : [];
+    const results = ids.map((id) => {
+      const index = TICKETS.findIndex((t) => t.id === id);
+      if (index === -1) {
+        return { ticket_id: id, ok: false, code: "not_found", message: "Ticket not found" };
+      }
+      const updated: TicketRow = { ...TICKETS[index], needs_human: false, status: "routed" };
+      TICKETS[index] = updated;
+      return { ticket_id: id, ok: true, ticket: updated };
+    });
+    const approved = results.filter((r) => r.ok).length;
+    return ok(results, { approved, failed: results.length - approved, total: results.length });
+  }
+
   const idMatch = route.match(/^\/tickets\/([^/]+)(\/.*)?$/);
   if (idMatch) {
     const ticket = TICKETS.find((t) => t.id === idMatch[1]) ?? TICKETS[0];
@@ -721,9 +758,9 @@ export async function mockResponse<T>(path: string, init: RequestInit = {}): Pro
     return ok(result.data, result.meta);
   }
 
-  if (route === "/chat") return ok(chatAnswer(payload.message ?? ""));
+  if (route === "/chat") return ok(chatAnswer(payload.message ?? "", currentUser()));
   if (route === "/chatbot") {
-    const answer = chatAnswer(payload.message ?? "");
+    const answer = chatAnswer(payload.message ?? "", currentUser());
     chatbotThread.push({ role: "user", content: payload.message ?? "", citations: [], blocked_reason: null });
     chatbotThread.push({
       role: "assistant",

@@ -71,10 +71,19 @@ def handle_message(request: ChatRequest, user: dict) -> ChatResponse:
         memory_q = context.is_memory_question(question)
         ticket_q = context.looks_like_ticket_query(question)
         ticket_context = ""
+        actionable_ticket_ids: list[str] = []
         if ticket_q:
             with trace.stage("ticket_db") as stage:
                 ticket_context = context.fetch_ticket_context(question)
                 stage.meta["chars"] = len(ticket_context)
+                # Bulk-approve candidates only ever surface for role=="admin" — the
+                # LLM itself never writes; this just decides whether the chat shows
+                # the "Bulk approve & route" button at all (see rag/schemas.py::
+                # ChatResponse.actionable_ticket_ids, api.py::bulk_approve_tickets).
+                if user.get("role") == "admin":
+                    actionable_ticket_ids = [
+                        t["id"] for t in context.fetch_approvable_tickets(question)
+                    ]
 
         use_conversational = greeting or memory_q or bool(ticket_context and ticket_q)
 
@@ -132,6 +141,7 @@ def handle_message(request: ChatRequest, user: dict) -> ChatResponse:
                 latency_ms=trace.total_ms,
                 total_tokens=trace.prompt_tokens + trace.completion_tokens,
                 trace_id=trace.id,
+                actionable_ticket_ids=actionable_ticket_ids,
             )
 
         # 4. KB path — rewrite follow-ups using summary + history, then agent

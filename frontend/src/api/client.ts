@@ -123,6 +123,18 @@ export interface ChatResponse {
   latency_ms: number;
   total_tokens: number;
   trace_id: string;
+  /** Only ever non-empty for role=="admin" on a ticket-SQL answer (e.g. "get me
+   * all P1 issues") — ids the "Bulk approve & route" button sends to
+   * POST /tickets/bulk-approve. */
+  actionable_ticket_ids: string[];
+}
+
+export interface BulkApproveResult {
+  ticket_id: string;
+  ok: boolean;
+  ticket?: TicketRow;
+  code?: string;
+  message?: string;
 }
 
 export interface RetrievedChunk {
@@ -606,6 +618,10 @@ export const api = {
     patch<TicketRow>(`/tickets/${id}/override`, body),
 
   approve: (id: string) => post<TicketRow>(`/tickets/${id}/approve`),
+
+  /** Admin-only. Backs the chat "Bulk approve & route" button. */
+  bulkApprove: (ticketIds: string[]) =>
+    post<BulkApproveResult[]>("/tickets/bulk-approve", { ticket_ids: ticketIds }),
 
   recalculateConfidence: () =>
     post<{ updated: number; failed: number; errors: { ticket_id: string; error: string }[] }>(
