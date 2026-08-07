@@ -8,7 +8,6 @@
 
 import {
   ApartmentOutlined,
-  AuditOutlined,
   DashboardOutlined,
   ExperimentOutlined,
   FileTextOutlined,
@@ -17,12 +16,13 @@ import {
   MessageOutlined,
   ThunderboltOutlined,
   UnorderedListOutlined,
+  UserOutlined,
 } from "@ant-design/icons";
-import { useQuery } from "@tanstack/react-query";
-import { Avatar, Button, Dropdown, Flex, Layout, Menu, Skeleton, Space, Tag, Tooltip, Typography } from "antd";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { Avatar, Button, Dropdown, Flex, Layout, Menu, Typography } from "antd";
 import { Outlet, useLocation, useNavigate } from "react-router-dom";
 
-import { api, auth } from "../api/client";
+import { api, auth, meQueryKey } from "../api/client";
 import ChatbotDrawer from "../components/ChatbotDrawer";
 import Logo from "../components/Logo";
 
@@ -45,7 +45,6 @@ const NAV: NavItem[] = [
   { key: "/chat", icon: <MessageOutlined />, label: "Assistant", managerOnly: true },
   { key: "/documents", icon: <FileTextOutlined />, label: "Knowledge Base", managerOnly: true },
   { key: "/evals", icon: <ExperimentOutlined />, label: "Evaluations", managerOnly: true },
-  { key: "/audit", icon: <AuditOutlined />, label: "Audit Trail", managerOnly: true },
   { key: "/dashboard", icon: <DashboardOutlined />, label: "Dashboard", managerOnly: true },
 ];
 
@@ -56,27 +55,22 @@ export function isManagerRole(role?: string) {
 export default function AppLayout() {
   const navigate = useNavigate();
   const location = useLocation();
+  const queryClient = useQueryClient();
 
   const { data: me } = useQuery({
-    queryKey: ["me"],
+    queryKey: meQueryKey(),
     queryFn: () => api.me().then((r) => r.data),
     staleTime: 5 * 60_000,
-  });
-
-  // Health drives the header badges — the fastest way to show whether the demo is
-  // running on a hosted endpoint or a local model, and how big the index is.
-  const { data: health } = useQuery({
-    queryKey: ["health"],
-    queryFn: () => api.health().then((r) => r.data),
-    refetchInterval: 30_000,
+    enabled: !!auth.get(),
   });
 
   const manager = isManagerRole(me?.role);
   const items = NAV.filter((item) => !item.managerOnly || manager).map(({ managerOnly: _managerOnly, ...item }) => item);
-  const lastAnswer = health?.last_answer;
 
   function signOut() {
     auth.clear();
+    // Drop every cached user/ticket so the next session cannot inherit this role's UI.
+    queryClient.clear();
     navigate("/login", { replace: true });
   }
 
@@ -130,55 +124,40 @@ export default function AppLayout() {
         >
           <span className="header-tagline">{TAGLINE}</span>
 
-          <Space size={8} wrap>
-            {health ? (
-              <>
-                <Tooltip title="Model provider and chat model currently serving decisions">
-                  <Tag color="processing">
-                    {health.provider} · {health.chat_model}
-                  </Tag>
-                </Tooltip>
-                <Tooltip title="Retrieval strategy behind every citation">
-                  <Tag color="processing">{health.retrieval_mode} retrieval</Tag>
-                </Tooltip>
-                <Tooltip title="Chunks currently indexed in the knowledge base">
-                  <Tag>
-                    <span className="tabular">{health.indexed_chunks?.toLocaleString?.() ?? health.indexed_chunks}</span>{" "}
-                    chunks
-                  </Tag>
-                </Tooltip>
-              </>
-            ) : (
-              <Skeleton.Input active size="small" style={{ width: 220 }} />
-            )}
-
-            {lastAnswer && (
-              <Tooltip title="Cost and latency of the most recent model call">
-                <Typography.Text type="secondary" className="tabular" style={{ fontSize: 12 }}>
-                  last answer {(lastAnswer.latency_ms / 1000).toFixed(1)}s ·{" "}
-                  {lastAnswer.total_tokens?.toLocaleString?.() ?? lastAnswer.total_tokens} tok · $
-                  {Number(lastAnswer.cost_usd ?? 0).toFixed(4)}
-                </Typography.Text>
-              </Tooltip>
-            )}
-
-            <Dropdown
-              menu={{
-                items: [
-                  { key: "who", label: `${me?.username ?? "…"} · ${me?.role ?? ""}`, disabled: true },
-                  { type: "divider" },
-                  { key: "signout", icon: <LogoutOutlined />, label: "Sign out", onClick: signOut },
-                ],
-              }}
-            >
-              <Button type="text" style={{ paddingInline: 8 }}>
-                <Flex align="center" gap={8}>
-                  <Typography.Text strong>{me?.username ?? "…"}</Typography.Text>
-                  {me?.role && <Tag color={manager ? "warning" : "default"}>{me.role}</Tag>}
-                </Flex>
-              </Button>
-            </Dropdown>
-          </Space>
+          <Dropdown
+            trigger={["click"]}
+            menu={{
+              items: [
+                {
+                  key: "profile",
+                  disabled: true,
+                  label: (
+                    <Flex vertical gap={2} style={{ paddingBlock: 4, minWidth: 140 }}>
+                      <Typography.Text strong style={{ textTransform: "none" }}>
+                        {me?.username ?? "…"}
+                      </Typography.Text>
+                      <Typography.Text type="secondary" style={{ fontSize: 12, textTransform: "capitalize" }}>
+                        {me?.role ?? "…"}
+                      </Typography.Text>
+                    </Flex>
+                  ),
+                },
+                { type: "divider" },
+                { key: "signout", icon: <LogoutOutlined />, label: "Sign out", onClick: signOut },
+              ],
+            }}
+          >
+            <Button
+              type="text"
+              aria-label="Account"
+              className="header-profile-btn"
+              icon={
+                <Avatar size={32} style={{ background: "var(--accent-action)" }} icon={!me ? <UserOutlined /> : undefined}>
+                  {me ? me.username.charAt(0).toUpperCase() : null}
+                </Avatar>
+              }
+            />
+          </Dropdown>
         </Header>
 
         {/* Keyed on the route so each screen fades up on entry rather than snapping. */}

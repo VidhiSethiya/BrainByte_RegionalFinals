@@ -98,7 +98,13 @@ export default function ChatbotDrawer() {
 
   return (
     <>
-      <FloatButton icon={<MessageOutlined />} type="primary" onClick={() => setOpen(true)} />
+      <FloatButton
+        className="chatbot-fab-blink"
+        icon={<MessageOutlined />}
+        type="primary"
+        tooltip="Ask the knowledge base"
+        onClick={() => setOpen(true)}
+      />
 
       <Drawer
         title="Knowledge Base Assistant"

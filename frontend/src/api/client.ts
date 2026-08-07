@@ -14,6 +14,11 @@ export const auth = {
   clear: () => localStorage.removeItem(TOKEN_KEY),
 };
 
+/** Bind /me (and role-gated UI) to the current JWT so a new login never reuses the previous user. */
+export function meQueryKey() {
+  return ["me", auth.get() ?? "anon"] as const;
+}
+
 export class ApiError extends Error {
   constructor(public code: string, message: string, public status: number) {
     super(message);
@@ -73,7 +78,9 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<{ data:
   if (!response.ok) {
     if (response.status === 401) {
       auth.clear();
-      if (!location.pathname.startsWith("/login")) location.href = "/login";
+      if (!location.pathname.startsWith("/login") && !location.pathname.startsWith("/manager/login")) {
+        location.href = "/login";
+      }
     }
     const error = payload?.error ?? {};
     throw new ApiError(error.code ?? "unknown", error.message ?? response.statusText, response.status);
@@ -128,6 +135,7 @@ export interface RetrievedChunk {
   vector_rank: number | null;
   keyword_rank: number | null;
   rerank_score: number | null;
+  metadata?: Record<string, unknown>;
 }
 
 export interface DocumentRow {
@@ -253,6 +261,8 @@ function decisionFromJson(
   raw: Partial<TriageDecision> | Record<string, unknown> | null | undefined
 ): TriageDecision | null {
   if (!raw || typeof raw !== "object") return null;
+  // Empty {} from a failed sync must not win over an older successful run.
+  if (!Object.keys(raw).length) return null;
   const severity =
     normalizeSeverity(String(raw.severity ?? "")) ||
     normalizeSeverity(ticket.severity) ||
@@ -262,6 +272,14 @@ function decisionFromJson(
     // Ticket may still carry fields when decision_json is thin.
     if (!normalizeSeverity(ticket.severity) || !ticket.assigned_team) return null;
   }
+  const rationale = String(raw.rationale ?? "").trim();
+  const hasSubstance =
+    rationale.length > 0 ||
+    Array.isArray(raw.evidence) && raw.evidence.length > 0 ||
+    Boolean(raw.category) ||
+    Boolean(raw.suggested_first_action);
+  // Prefer falling through to an older run when this payload is only defaults.
+  if (!hasSubstance && !raw.severity && !raw.assigned_team) return null;
   return {
     ticket_id: String(raw.ticket_id ?? ticket.id),
     category: String(raw.category ?? ticket.category ?? ""),
@@ -307,22 +325,34 @@ export function adaptTicketDetail(raw: TicketDetailRaw): TicketDetail {
     ...raw.ticket,
     severity: normalizeSeverity(raw.ticket.severity) || raw.ticket.severity,
   };
-  const run = raw.runs?.[0];
-  const decision =
+  const runs = raw.runs ?? [];
+  // Newest run first; skip empty failed syncs so the drawer keeps the last real decision.
+  let chosenRun = runs[0];
+  let decision =
     raw.decision ??
-    decisionFromJson(ticket, run?.decision_json) ??
-    decisionFromTicket(ticket);
+    (chosenRun ? decisionFromJson(ticket, chosenRun.decision_json) : null);
+  if (!decision) {
+    for (const run of runs) {
+      const parsed = decisionFromJson(ticket, run.decision_json);
+      if (parsed) {
+        chosenRun = run;
+        decision = parsed;
+        break;
+      }
+    }
+  }
+  decision = decision ?? decisionFromTicket(ticket);
   return {
     ticket,
     body_masked: raw.body_masked ?? ticket.body_masked ?? "",
     decision,
-    guardrails_fired: raw.guardrails_fired ?? run?.guardrails_fired ?? [],
-    model: raw.model ?? run?.model ?? "",
-    tier: (raw.tier as TicketDetail["tier"]) ?? (run?.tier as TicketDetail["tier"]) ?? "standard",
-    latency_ms: raw.latency_ms ?? run?.latency_ms ?? 0,
-    total_tokens: raw.total_tokens ?? run?.tokens ?? 0,
-    cost_usd: raw.cost_usd ?? run?.cost_usd ?? 0,
-    trace_id: raw.trace_id ?? run?.trace_id ?? "",
+    guardrails_fired: raw.guardrails_fired ?? chosenRun?.guardrails_fired ?? [],
+    model: raw.model ?? chosenRun?.model ?? "",
+    tier: (raw.tier as TicketDetail["tier"]) ?? (chosenRun?.tier as TicketDetail["tier"]) ?? "standard",
+    latency_ms: raw.latency_ms ?? chosenRun?.latency_ms ?? 0,
+    total_tokens: raw.total_tokens ?? chosenRun?.tokens ?? 0,
+    cost_usd: raw.cost_usd ?? chosenRun?.cost_usd ?? 0,
+    trace_id: raw.trace_id ?? chosenRun?.trace_id ?? "",
   };
 }
 
@@ -478,8 +508,16 @@ export const api = {
     return request<any>("/documents/upload", { method: "POST", body });
   },
 
-  search: (query: string, options?: { top_k?: number; decompose?: boolean }) =>
-    post<RetrievedChunk[]>("/search", { query, ...options }),
+  search: (
+    query: string,
+    options?: {
+      top_k?: number;
+      decompose?: boolean;
+      exclude_external_id?: string;
+      exclude_ticket_id?: string;
+      filters?: Record<string, string>;
+    }
+  ) => post<RetrievedChunk[]>("/search", { query, ...options }),
 
   feedback: (messageId: string, rating: 1 | -1, comment = "") =>
     post("/feedback", { message_id: messageId, rating, comment }),

@@ -440,10 +440,11 @@ def triage_enrich(state: TriageState) -> TriageState:
     )
 
     def _do_retrieve() -> list[RetrievedChunk]:
+        # Over-fetch so dropping the current ticket (self-match) still leaves enough.
         return retrieve(
             query,
             user=state["user"],
-            top_k=TRIAGE_ENRICH_TOP_K,
+            top_k=TRIAGE_ENRICH_TOP_K + 4,
             trace=trace,
         )
 
@@ -454,6 +455,17 @@ def triage_enrich(state: TriageState) -> TriageState:
     else:
         chunks = _do_retrieve()
 
+    # Never use this ticket's own indexed body as "evidence" or a duplicate of itself.
+    self_key = (ticket.external_id or "").strip()
+    self_id = (ticket.id or "").strip()
+    chunks = [
+        c
+        for c in chunks
+        if (c.metadata.get("external_id") or "") != self_key
+        and (c.metadata.get("ticket_id") or "") != self_id
+        and not (self_key and self_key in (c.filename or ""))
+    ][:TRIAGE_ENRICH_TOP_K]
+
     # Duplicate check against the strongest precedent-ticket match, if any turned
     # up. Bounded to at most one extra fast-tier call per enrich visit.
     duplicate_of = None
@@ -462,7 +474,6 @@ def triage_enrich(state: TriageState) -> TriageState:
             c
             for c in chunks
             if c.metadata.get("doc_type") == "ticket_history"
-            and c.metadata.get("external_id") != ticket.external_id
         ),
         None,
     )
@@ -688,22 +699,52 @@ def triage_reflect(state: TriageState) -> TriageState:
 
 
 def _compose_rationale(state: TriageState) -> str:
-    """The text verify() checks for groundedness — every clause here must trace to
-    a citation or an explicit acknowledgement that none was found."""
+    """Short plain-English why — three bullets max for the decision drawer."""
     ticket = state["ticket"]
+    team = state.get("assigned_team") or "ops"
+    team_label = {"ops": "Ops", "azure": "Azure", "aws": "AWS", "gcp": "GCP"}.get(team, team)
+    severity = state.get("severity") or "Medium"
+    sla = int(state.get("sla_target_mins") or 0)
+    if sla <= 0:
+        sla_text = "no SLA set"
+    elif sla < 60:
+        sla_text = f"{sla} min"
+    elif sla % 60 == 0:
+        hours = sla // 60
+        sla_text = f"{hours}h"
+    else:
+        sla_text = f"{sla / 60:.1f}h"
+
+    category = state.get("category") or "uncategorised"
+    subcategory = state.get("subcategory") or ""
+    service = state.get("service") or ticket.application or "unknown service"
+    kind = f"{category}" + (f" / {subcategory}" if subcategory else "")
+
+    def _one_line(text: str, fallback: str) -> str:
+        line = (text or "").strip().replace("\n", " ")
+        if not line:
+            return fallback
+        # Keep citations; drop trailing fluff after first sentence when long.
+        if len(line) > 180:
+            cut = line.find(". ")
+            if 40 <= cut <= 180:
+                line = line[: cut + 1]
+        return line
+
+    classify_why = _one_line(state.get("classify_rationale") or "", "Matched from the ticket text.")
+    assess_why = _one_line(state.get("assess_rationale") or "", "Based on impact and SLA policy.")
+    route_why = _one_line(state.get("route_rationale") or "", "Based on the service catalogue.")
+
     parts = [
-        f"Classified as {state.get('category', '')}/{state.get('subcategory', '')} "
-        f"(service: {state.get('service') or ticket.application}). "
-        f"{state.get('classify_rationale', '')}",
-        f"Priority {state.get('severity', 'Medium')}, score {state.get('priority_score', 50)}, "
-        f"SLA target {state.get('sla_target_mins', 0)} minutes. {state.get('assess_rationale', '')}",
-        f"Routed to {state.get('assigned_team', 'ops')}. {state.get('route_rationale', '')}",
+        f"- **Type:** {kind} on {service}. {classify_why}",
+        f"- **Priority:** {severity} (respond in {sla_text}). {assess_why}",
+        f"- **Team:** {team_label}. {route_why}",
     ]
     if state.get("duplicate_of"):
-        parts.append(f"Possible duplicate of {state['duplicate_of']}.")
+        parts.append(f"- **Note:** may duplicate {state['duplicate_of']}.")
     if state.get("reflect_issues"):
-        parts.append("Reflection flagged: " + "; ".join(state["reflect_issues"]))
-    return "\n".join(p.strip() for p in parts if p.strip())
+        parts.append("- **Check:** " + "; ".join(state["reflect_issues"]))
+    return "\n".join(parts)
 
 
 def triage_verify(state: TriageState) -> TriageState:
@@ -992,22 +1033,33 @@ def ingest_and_triage(raw_ticket: dict, user: dict) -> tuple[TicketRow, TriageSt
                     row.body_masked = ticket.body_masked
                 row.category = decision.category
                 row.subcategory = decision.subcategory
-                row.severity = decision.severity
-                row.priority_score = decision.priority_score
-                row.assigned_team = decision.assigned_team
+                # Do not clobber a manager override on re-sync / re-triage.
+                if not row.overridden_by:
+                    row.severity = decision.severity
+                    row.assigned_team = decision.assigned_team
+                    row.priority_score = decision.priority_score
+                else:
+                    # Still refresh score only when priority was not the overridden field —
+                    # keep both severity and team frozen once any human override exists.
+                    pass
                 row.confidence = decision.confidence
                 row.needs_human = decision.needs_human
                 row.status = state.get("status", "triaged")
+                row.last_error = None
             else:
-                # Dead-letter: no TriageDecision — park failed + bump sync_attempts.
-                row.status = state.get("status", "failed")
+                # Dead-letter run — keep a prior human-gated decision visible in the
+                # approval queue. Flipping those rows to status=failed made SCRUM
+                # tickets vanish from Control Tower after a bad Sync / LLM outage.
                 row.last_error = (
                     state.get("blocked_reason", "")
                     or state.get("escalation_reason", "")
                     or "triage produced no decision"
                 )
-                if row.status == "failed":
-                    row.sync_attempts = (row.sync_attempts or 0) + 1
+                row.sync_attempts = (row.sync_attempts or 0) + 1
+                if row.needs_human and row.severity and row.assigned_team:
+                    row.status = "awaiting_approval"
+                else:
+                    row.status = state.get("status", "failed")
             s.commit()
 
             run = TriageRun(

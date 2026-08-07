@@ -1,3 +1,12 @@
+# TicketSphere sample incident corpus
+# Failure MODE clusters (for similarity testing) — not same-service clusters.
+# Types: NODE_CAPACITY | DB_SATURATION | INGRESS_502 | AUTH_FAILURE | QUEUE_BACKLOG
+# Format matches the original Azure AKS sample below.
+
+================================================================================
+# TYPE: NODE_CAPACITY — K8s node NotReady / insufficient CPU → HTTP 503
+================================================================================
+
 title INC000A1F3C7D | Azure support service API authentication failures
 
 Incident Overview
@@ -10,7 +19,6 @@ Customer impact: Requests to /api/v1/orders and /api/v1/customers intermittently
 
 Application logs
 
-
 2026-08-07T08:41:12.117Z INFO  trace_id=8a71c2d9 service=customer-api method=GET path=/api/v1/customers status=200 duration_ms=142
 2026-08-07T08:41:38.401Z ERROR trace_id=44bc91ef service=customer-api method=GET path=/api/v1/customers status=503 duration_ms=10002
 2026-08-07T08:41:38.402Z ERROR trace_id=44bc91ef http_response={"status":503,"code":"ServiceUnavailable","message":"No healthy customer-api instances are available","requestId":"44bc91ef"}
@@ -19,4 +27,613 @@ Application logs
 2026-08-07T08:43:04.225Z WARN  service=kube-scheduler pending_pods=31 reason="Insufficient cpu"
 2026-08-07T08:44:19.801Z ERROR service=aks node=aks-prod-184 status=NotReady reason="Kubelet stopped posting node status"
 2026-08-07T08:45:02.331Z INFO  service=customer-api recovery_pods_ready=5 desired=12
-ode health, node-pool capacity, scheduler events, ingress endpoints and recent infrastructure changes. Restore healthy capacity and verify order/customer API availability end to end.
+
+Next actions: Check node health, node-pool capacity, scheduler events, ingress endpoints and recent infrastructure changes. Restore healthy capacity and verify order/customer API availability end to end.
+
+---
+
+title INC000B2E4D8A | AWS EKS inventory API unavailable after worker node failures
+
+Incident Overview
+Inventory read APIs started returning HTTP 503 after multiple EKS worker nodes flipped to NotReady. The cluster autoscaler could not place replacement pods fast enough, so ALB target groups lost healthy targets.
+
+Environment: Production
+Cloud: AWS
+Affected service: EKS / aws-load-balancer-controller / inventory-api
+Customer impact: Catalog and stock-check calls to /api/v1/inventory fail with 503; warehouse sync jobs retry and lag.
+
+Application logs
+
+2026-08-07T09:12:04.220Z INFO  trace_id=c1a90f33 service=inventory-api method=GET path=/api/v1/inventory/sku/44821 status=200 duration_ms=88
+2026-08-07T09:12:41.019Z ERROR trace_id=9d22ab71 service=inventory-api method=GET path=/api/v1/inventory/sku/44821 status=503 duration_ms=10011
+2026-08-07T09:12:41.020Z ERROR trace_id=9d22ab71 http_response={"status":503,"code":"ServiceUnavailable","message":"No healthy inventory-api instances are available","requestId":"9d22ab71"}
+2026-08-07T09:13:02.441Z WARN  service=alb target_group=inventory-api healthy_targets=2 expected=10
+2026-08-07T09:13:28.775Z ERROR service=orders-api dependency=inventory-api status=503 message="Upstream unavailable"
+2026-08-07T09:14:11.104Z WARN  service=kube-scheduler pending_pods=27 reason="Insufficient cpu"
+2026-08-07T09:14:55.662Z ERROR service=eks node=ip-10-2-44-19.ec2.internal status=NotReady reason="Kubelet stopped posting node status"
+2026-08-07T09:15:40.901Z INFO  service=inventory-api recovery_pods_ready=4 desired=10
+
+Next actions: Inspect EKS node conditions, Cluster Autoscaler events, ALB target health, and recent AMI/node-group changes. Restore capacity and validate inventory reads end to end.
+
+---
+
+title INC000C3F5E9B | GCP GKE billing API capacity loss after node NotReady
+
+Incident Overview
+Billing APIs became intermittently unavailable when several GKE nodes stopped heartbeating. Pending pods piled up with Insufficient cpu while ingress backends drained healthy endpoints.
+
+Environment: Production
+Cloud: GCP
+Affected service: GKE / gce-ingress / billing-api
+Customer impact: Invoice and usage endpoints under /api/v1/billing return intermittent 503; finance jobs stall.
+
+Application logs
+
+2026-08-07T10:03:18.551Z INFO  trace_id=e77b1c02 service=billing-api method=GET path=/api/v1/billing/invoices status=200 duration_ms=210
+2026-08-07T10:03:52.884Z ERROR trace_id=55aa9012 service=billing-api method=GET path=/api/v1/billing/invoices status=503 duration_ms=10008
+2026-08-07T10:03:52.885Z ERROR trace_id=55aa9012 http_response={"status":503,"code":"ServiceUnavailable","message":"No healthy billing-api instances are available","requestId":"55aa9012"}
+2026-08-07T10:04:19.330Z WARN  service=gce-ingress backend=billing-api healthy_endpoints=2 expected=8
+2026-08-07T10:04:41.902Z ERROR service=portal-api dependency=billing-api status=503 message="Upstream unavailable"
+2026-08-07T10:05:22.118Z WARN  service=kube-scheduler pending_pods=19 reason="Insufficient cpu"
+2026-08-07T10:06:01.447Z ERROR service=gke node=gke-prod-pool-3-a1 status=NotReady reason="Kubelet stopped posting node status"
+2026-08-07T10:06:48.220Z INFO  service=billing-api recovery_pods_ready=3 desired=8
+
+Next actions: Review GKE node health, node-pool autoscaling, ingress backend services, and recent cluster upgrades. Restore healthy capacity and re-test billing APIs.
+
+---
+
+title INC000D4A6F0C | Azure AKS notifications API 503 after node pool drain
+
+Incident Overview
+Notification dispatch APIs returned 503 when an AKS user node pool lost multiple nodes. Scheduler could not place replacements; ingress healthy endpoint count collapsed.
+
+Environment: Production
+Cloud: Azure
+Affected service: AKS / ingress-nginx / notifications-api
+Customer impact: Push and email notification enqueue endpoints fail; customers miss order status updates.
+
+Application logs
+
+2026-08-07T11:21:09.100Z INFO  trace_id=ab12cd34 service=notifications-api method=POST path=/api/v1/notifications status=202 duration_ms=64
+2026-08-07T11:21:44.772Z ERROR trace_id=de56ef78 service=notifications-api method=POST path=/api/v1/notifications status=503 duration_ms=10005
+2026-08-07T11:21:44.773Z ERROR trace_id=de56ef78 http_response={"status":503,"code":"ServiceUnavailable","message":"No healthy notifications-api instances are available","requestId":"de56ef78"}
+2026-08-07T11:22:08.441Z WARN  service=ingress-nginx upstream=notifications-api healthy_endpoints=1 expected=6
+2026-08-07T11:22:33.019Z ERROR service=orders-api dependency=notifications-api status=503 message="Upstream unavailable"
+2026-08-07T11:23:10.550Z WARN  service=kube-scheduler pending_pods=14 reason="Insufficient cpu"
+2026-08-07T11:23:51.882Z ERROR service=aks node=aks-userpool-291 status=NotReady reason="Kubelet stopped posting node status"
+2026-08-07T11:24:30.114Z INFO  service=notifications-api recovery_pods_ready=2 desired=6
+
+Next actions: Check AKS node-pool scale events, kubelet logs, ingress endpoints, and recent VMSS changes. Restore capacity and verify notification delivery path.
+
+---
+
+title INC000E5B7A1D | Ops on-prem k8s search API outage after worker NotReady
+
+Incident Overview
+Internal search APIs failed with 503 after several on-prem Kubernetes workers stopped posting node status. Pending pods accumulated; Traefik backends lost healthy targets.
+
+Environment: Production
+Cloud: Ops
+Affected service: onprem-k8s / traefik / search-api
+Customer impact: Support consoles cannot load search results; agent workflows blocked.
+
+Application logs
+
+2026-08-07T12:08:22.330Z INFO  trace_id=1122aa99 service=search-api method=GET path=/api/v1/search status=200 duration_ms=155
+2026-08-07T12:08:59.601Z ERROR trace_id=3344bb00 service=search-api method=GET path=/api/v1/search status=503 duration_ms=10009
+2026-08-07T12:08:59.602Z ERROR trace_id=3344bb00 http_response={"status":503,"code":"ServiceUnavailable","message":"No healthy search-api instances are available","requestId":"3344bb00"}
+2026-08-07T12:09:18.770Z WARN  service=traefik backend=search-api healthy_endpoints=2 expected=9
+2026-08-07T12:09:44.221Z ERROR service=support-portal dependency=search-api status=503 message="Upstream unavailable"
+2026-08-07T12:10:21.009Z WARN  service=kube-scheduler pending_pods=22 reason="Insufficient cpu"
+2026-08-07T12:11:02.448Z ERROR service=k8s node=ops-worker-07 status=NotReady reason="Kubelet stopped posting node status"
+2026-08-07T12:11:40.880Z INFO  service=search-api recovery_pods_ready=3 desired=9
+
+Next actions: Inspect worker host health, kubelet connectivity, Traefik backends, and recent OS patching. Restore node capacity and validate search end to end.
+
+================================================================================
+# TYPE: DB_SATURATION — database CPU / connection pool exhaustion → latency
+================================================================================
+
+title INC000F6C8B2E | AWS RDS payments DB CPU saturation and pool exhaustion
+
+Incident Overview
+Payments write path slowed sharply after RDS primary CPU stayed above 90%. Application connection pools hit max size; checkout APIs began timing out waiting for DB connections.
+
+Environment: Production
+Cloud: AWS
+Affected service: RDS PostgreSQL / payments-api / rds-prod
+Customer impact: Checkout and refund endpoints exceed SLA; customers see spinning pay buttons and 504s.
+
+Application logs
+
+2026-08-07T08:55:11.040Z INFO  trace_id=aa01bb02 service=payments-api method=POST path=/api/v1/payments status=201 duration_ms=190
+2026-08-07T08:55:48.771Z ERROR trace_id=cc03dd04 service=payments-api method=POST path=/api/v1/payments status=504 duration_ms=30012
+2026-08-07T08:55:48.772Z ERROR trace_id=cc03dd04 db_error={"code":"08004","message":"connection pool exhausted","pool_active":100,"pool_max":100}
+2026-08-07T08:56:10.115Z WARN  service=cloudwatch metric=CPUUtilization resource=rds-prod value=93.4
+2026-08-07T08:56:33.440Z WARN  service=payments-api db_wait_ms_p95=8420
+2026-08-07T08:57:02.881Z ERROR service=checkout-api dependency=payments-api status=504 message="upstream timeout"
+2026-08-07T08:57:41.220Z WARN  service=rds active_connections=487 max_connections=500
+2026-08-07T08:58:15.009Z INFO  service=payments-api slow_query="UPDATE ledger SET status=$1 WHERE id=$2" duration_ms=6120
+
+Next actions: Identify hot queries, check for missing indexes/locks, consider read-replica offload or temporary scale-up. Drain idle connections and verify payments p95 recovers.
+
+---
+
+title INC000G7D9C3F | Azure SQL reporting write latency from DTU saturation
+
+Incident Overview
+Reporting APIs timing out on writes while Azure SQL DTU/CPU remained saturated. Connection waits climbed; batch jobs piled up behind blocked sessions.
+
+Environment: Production
+Cloud: Azure
+Affected service: Azure SQL / reporting-api / azure-sql-01
+Customer impact: Report generation and export endpoints fail or hang; finance dashboards stale.
+
+Application logs
+
+2026-08-07T09:40:05.210Z INFO  trace_id=ee11ff22 service=reporting-api method=POST path=/api/v1/reports/run status=202 duration_ms=240
+2026-08-07T09:40:51.884Z ERROR trace_id=gg33hh44 service=reporting-api method=POST path=/api/v1/reports/run status=504 duration_ms=30005
+2026-08-07T09:40:51.885Z ERROR trace_id=gg33hh44 db_error={"code":"HYT00","message":"timeout expired waiting for connection","pool_active":80,"pool_max":80}
+2026-08-07T09:41:12.330Z WARN  service=azure-monitor metric=dtu_consumption_percent resource=azure-sql-01 value=97.1
+2026-08-07T09:41:40.771Z WARN  service=reporting-api db_wait_ms_p95=9100
+2026-08-07T09:42:08.102Z ERROR service=portal-api dependency=reporting-api status=504 message="upstream timeout"
+2026-08-07T09:42:44.550Z WARN  service=azure-sql blocked_sessions=12 waiting_tasks=38
+2026-08-07T09:43:20.018Z INFO  service=reporting-api slow_query="INSERT INTO report_rows SELECT ..." duration_ms=7800
+
+Next actions: Check DTU/CPU, blocking sessions, recent schema changes, and long-running ETL. Scale DTU or kill blockers; re-test report run path.
+
+---
+
+title INC000H8E0D4A | GCP Cloud SQL catalog DB connection refusals
+
+Incident Overview
+Catalog services started failing to obtain Cloud SQL connections. Instance CPU and connection count were near limits; apps logged connection refused / pool exhaustion.
+
+Environment: Production
+Cloud: GCP
+Affected service: Cloud SQL / catalog-api / cloudsql-catalog
+Customer impact: Product detail and search enrichment calls fail; storefront shows missing attributes.
+
+Application logs
+
+2026-08-07T10:18:33.660Z INFO  trace_id=ii55jj66 service=catalog-api method=GET path=/api/v1/products/991 status=200 duration_ms=120
+2026-08-07T10:19:09.441Z ERROR trace_id=kk77ll88 service=catalog-api method=GET path=/api/v1/products/991 status=503 duration_ms=5004
+2026-08-07T10:19:09.442Z ERROR trace_id=kk77ll88 db_error={"code":"08001","message":"connection refused / pool exhausted","pool_active":120,"pool_max":120}
+2026-08-07T10:19:28.119Z WARN  service=stackdriver metric=cpu.utilization resource=cloudsql-catalog value=0.91
+2026-08-07T10:19:55.770Z WARN  service=catalog-api db_wait_ms_p95=7200
+2026-08-07T10:20:22.301Z ERROR service=storefront dependency=catalog-api status=503 message="Upstream unavailable"
+2026-08-07T10:20:58.882Z WARN  service=cloudsql active_connections=940 max_connections=1000
+2026-08-07T10:21:30.440Z INFO  service=catalog-api slow_query="SELECT * FROM product_attrs WHERE sku=$1" duration_ms=5400
+
+Next actions: Inspect Cloud SQL connections, CPU, locks, and recent migration scripts. Raise capacity or kill idle clients; verify catalog reads recover.
+
+---
+
+title INC000I9F1E5B | AWS Aurora orders DB pool thrashing after spike
+
+Incident Overview
+Order write latency spiked when Aurora writer CPU and connections saturated during a traffic surge. Hikari pools exhausted; order-create APIs returned 504.
+
+Environment: Production
+Cloud: AWS
+Affected service: Aurora MySQL / orders-api / aurora-orders
+Customer impact: Place-order and edit-order flows fail; cart abandonment rises.
+
+Application logs
+
+2026-08-07T11:05:14.090Z INFO  trace_id=mm99nn00 service=orders-api method=POST path=/api/v1/orders status=201 duration_ms=175
+2026-08-07T11:05:50.661Z ERROR trace_id=oo11pp22 service=orders-api method=POST path=/api/v1/orders status=504 duration_ms=30020
+2026-08-07T11:05:50.662Z ERROR trace_id=oo11pp22 db_error={"code":"08004","message":"HikariPool connection timeout","pool_active":64,"pool_max":64}
+2026-08-07T11:06:12.228Z WARN  service=cloudwatch metric=CPUUtilization resource=aurora-orders value=88.6
+2026-08-07T11:06:40.775Z WARN  service=orders-api db_wait_ms_p95=8800
+2026-08-07T11:07:05.330Z ERROR service=checkout-api dependency=orders-api status=504 message="upstream timeout"
+2026-08-07T11:07:39.901Z WARN  service=aurora DatabaseConnections=780 max=800
+2026-08-07T11:08:11.440Z INFO  service=orders-api slow_query="INSERT INTO order_lines ..." duration_ms=4900
+
+Next actions: Review Aurora writer metrics, top SQL, and connection churn. Temporary failover/scale or query kill; confirm order create p95 recovers.
+
+---
+
+title INC000J0A2F6C | Ops PostgreSQL auth-svc connection saturation
+
+Incident Overview
+Internal auth-svc could not obtain DB connections from the on-prem PostgreSQL primary. CPU and connection limits were saturated; login APIs timed out.
+
+Environment: Production
+Cloud: Ops
+Affected service: PostgreSQL / auth-svc / pg-auth-01
+Customer impact: Employee and partner SSO logins hang or fail; session refresh errors spike.
+
+Application logs
+
+2026-08-07T12:30:08.550Z INFO  trace_id=qq33rr44 service=auth-svc method=POST path=/oauth/token status=200 duration_ms=95
+2026-08-07T12:30:44.118Z ERROR trace_id=ss55tt66 service=auth-svc method=POST path=/oauth/token status=504 duration_ms=15008
+2026-08-07T12:30:44.119Z ERROR trace_id=ss55tt66 db_error={"code":"53300","message":"remaining connection slots are reserved","pool_active":50,"pool_max":50}
+2026-08-07T12:31:05.770Z WARN  service=prometheus metric=pg_cpu_percent resource=pg-auth-01 value=94.2
+2026-08-07T12:31:33.220Z WARN  service=auth-svc db_wait_ms_p95=7600
+2026-08-07T12:32:01.881Z ERROR service=portal dependency=auth-svc status=504 message="upstream timeout"
+2026-08-07T12:32:40.009Z WARN  service=postgres numbackends=198 max_connections=200
+2026-08-07T12:33:12.440Z INFO  service=auth-svc slow_query="SELECT * FROM sessions WHERE refresh_token=$1" duration_ms=4100
+
+Next actions: Kill idle backends, check for connection leaks in auth-svc, review long transactions. Raise max_connections only after root-cause; verify token endpoint recovers.
+
+================================================================================
+# TYPE: INGRESS_502 — ingress / gateway elevated HTTP 502 Bad Gateway
+================================================================================
+
+title INC000K1B3A7D | AWS ALB payments API elevated HTTP 502
+
+Incident Overview
+Payments edge path returned intermittent HTTP 502 after ALB target response timeouts. Upstream pods were slow but not fully down; gateway cancelled requests.
+
+Environment: Production
+Cloud: AWS
+Affected service: ALB / eks-payments / payments-api
+Customer impact: Payment capture and status polling fail with 502; mobile app shows payment errors.
+
+Application logs
+
+2026-08-07T08:20:11.100Z INFO  trace_id=uu77vv88 service=payments-api method=POST path=/api/v1/payments/capture status=200 duration_ms=310
+2026-08-07T08:20:48.771Z ERROR trace_id=ww99xx00 service=alb method=POST path=/api/v1/payments/capture status=502 duration_ms=6003
+2026-08-07T08:20:48.772Z ERROR trace_id=ww99xx00 http_response={"status":502,"code":"BadGateway","message":"Target timed out","requestId":"ww99xx00"}
+2026-08-07T08:21:10.440Z WARN  service=alb target_response_time_p95=5.8s unhealthy_host_count=3
+2026-08-07T08:21:35.119Z ERROR service=mobile-bff dependency=payments-api status=502 message="Bad Gateway"
+2026-08-07T08:22:02.880Z WARN  service=payments-api upstream_latency_ms_p95=5400
+2026-08-07T08:22:40.221Z INFO  service=alb elb_5xx=182 period=5m
+2026-08-07T08:23:11.009Z WARN  service=payments-api gc_pause_ms=780
+
+Next actions: Check ALB target health, pod latency, recent canary, and connection idle timeouts. Align gateway timeout with upstream SLO; verify capture path.
+
+---
+
+title INC000L2C4B8E | Azure App Gateway catalog API Bad Gateway spike
+
+Incident Overview
+Catalog traffic through Azure Application Gateway spiked HTTP 502. Backend pool members exceeded response time; gateway returned Bad Gateway to clients.
+
+Environment: Production
+Cloud: Azure
+Affected service: Application Gateway / AKS / catalog-api
+Customer impact: Product pages intermittently blank; SEO crawlers record 502s.
+
+Application logs
+
+2026-08-07T09:15:22.330Z INFO  trace_id=yy11zz22 service=catalog-api method=GET path=/api/v1/catalog status=200 duration_ms=180
+2026-08-07T09:15:59.001Z ERROR trace_id=a1b2c3d4 service=appgw method=GET path=/api/v1/catalog status=502 duration_ms=6008
+2026-08-07T09:15:59.002Z ERROR trace_id=a1b2c3d4 http_response={"status":502,"code":"BadGateway","message":"Backend server timed out","requestId":"a1b2c3d4"}
+2026-08-07T09:16:20.770Z WARN  service=appgw backend_response_time_p95=6.1s unhealthy_servers=2
+2026-08-07T09:16:48.441Z ERROR service=storefront dependency=catalog-api status=502 message="Bad Gateway"
+2026-08-07T09:17:12.118Z WARN  service=catalog-api upstream_latency_ms_p95=5800
+2026-08-07T09:17:50.880Z INFO  service=appgw failed_requests=210 period=5m
+2026-08-07T09:18:22.009Z WARN  service=catalog-api thread_pool_queue_depth=140
+
+Next actions: Inspect App Gateway backend health probes, AKS pod CPU, and probe/timeout settings. Fix slow handlers; confirm catalog 502 rate drops.
+
+---
+
+title INC000M3D5C9F | GCP HTTPS LB recommendations API 502 timeouts
+
+Incident Overview
+Recommendations API clients saw HTTP 502 via the global HTTPS load balancer after backend NEG latency exceeded the gateway timeout.
+
+Environment: Production
+Cloud: GCP
+Affected service: HTTPS LB / GKE / recommendations-api
+Customer impact: Home-page recommendations empty; conversion rate dips on mobile web.
+
+Application logs
+
+2026-08-07T10:44:08.550Z INFO  trace_id=e5f6a7b8 service=recommendations-api method=GET path=/api/v1/recommendations status=200 duration_ms=220
+2026-08-07T10:44:45.118Z ERROR trace_id=c9d0e1f2 service=https-lb method=GET path=/api/v1/recommendations status=502 duration_ms=6010
+2026-08-07T10:44:45.119Z ERROR trace_id=c9d0e1f2 http_response={"status":502,"code":"BadGateway","message":"backend_timeout","requestId":"c9d0e1f2"}
+2026-08-07T10:45:08.770Z WARN  service=https-lb backend_latencies_p95=5.9s
+2026-08-07T10:45:36.221Z ERROR service=web-bff dependency=recommendations-api status=502 message="Bad Gateway"
+2026-08-07T10:46:01.880Z WARN  service=recommendations-api model_infer_ms_p95=5200
+2026-08-07T10:46:40.009Z INFO  service=https-lb backend_request_count_5xx=156 period=5m
+2026-08-07T10:47:12.440Z WARN  service=recommendations-api cache_miss_ratio=0.82
+
+Next actions: Check NEG health, model inference latency, LB timeout, and recent model deploy. Add fallback cache; verify 502 rate.
+
+---
+
+title INC000N4E6D0A | Ops nginx edge elevated 502 to checkout-svc
+
+Incident Overview
+Edge nginx started returning HTTP 502 to checkout-svc after upstream read timeouts. Pods were alive but p95 latency exceeded proxy timeouts.
+
+Environment: Production
+Cloud: Ops
+Affected service: nginx-edge / checkout-svc
+Customer impact: Checkout page fails intermittently; payment step cannot load.
+
+Application logs
+
+2026-08-07T11:33:19.100Z INFO  trace_id=11223344 service=checkout-svc method=GET path=/checkout/session status=200 duration_ms=140
+2026-08-07T11:33:55.771Z ERROR trace_id=55667788 service=nginx-edge method=GET path=/checkout/session status=502 duration_ms=6002
+2026-08-07T11:33:55.772Z ERROR trace_id=55667788 http_response={"status":502,"code":"BadGateway","message":"upstream timed out","requestId":"55667788"}
+2026-08-07T11:34:18.440Z WARN  service=nginx-edge upstream=checkout-svc upstream_response_time=6.02
+2026-08-07T11:34:44.119Z ERROR service=web dependency=checkout-svc status=502 message="Bad Gateway"
+2026-08-07T11:35:10.880Z WARN  service=checkout-svc upstream_latency_ms_p95=5600
+2026-08-07T11:35:48.221Z INFO  service=nginx-edge http_502=134 period=5m
+2026-08-07T11:36:20.009Z WARN  service=checkout-svc dependency=payments-api wait_ms=4100
+
+Next actions: Align nginx proxy_read_timeout, profile checkout-svc dependency waits, and check recent config reload. Validate checkout session endpoint.
+
+---
+
+title INC000O5F7E1B | AWS API Gateway partner API intermittent 502
+
+Incident Overview
+Partner-facing REST APIs behind API Gateway returned intermittent 502. Integration latency to the VPC link / NLB exceeded configured timeouts.
+
+Environment: Production
+Cloud: AWS
+Affected service: API Gateway / NLB / partner-api
+Customer impact: Partner integrations retry; order sync and inventory push fail SLAs.
+
+Application logs
+
+2026-08-07T12:50:05.330Z INFO  trace_id=99aabbcc service=partner-api method=POST path=/v1/partner/orders status=202 duration_ms=260
+2026-08-07T12:50:42.001Z ERROR trace_id=ddeeff00 service=apigw method=POST path=/v1/partner/orders status=502 duration_ms=29050
+2026-08-07T12:50:42.002Z ERROR trace_id=ddeeff00 http_response={"status":502,"code":"BadGateway","message":"Endpoint request timed out","requestId":"ddeeff00"}
+2026-08-07T12:51:05.770Z WARN  service=apigw integration_latency_ms_p95=29100
+2026-08-07T12:51:33.441Z ERROR service=partner-client dependency=partner-api status=502 message="Bad Gateway"
+2026-08-07T12:52:01.118Z WARN  service=partner-api upstream_latency_ms_p95=27000
+2026-08-07T12:52:40.880Z INFO  service=apigw 5XXError=98 period=5m
+2026-08-07T12:53:12.009Z WARN  service=nlb unhealthy_target_count=2
+
+Next actions: Review API Gateway integration timeout, NLB target health, and partner-api thread saturation. Confirm partner order ingest recovers.
+
+================================================================================
+# TYPE: AUTH_FAILURE — OIDC / JWT / API key authentication failures
+================================================================================
+
+title INC000P6A8F2C | Azure Entra ID token validation failures on customer-api
+
+Incident Overview
+Customer APIs began rejecting previously valid bearer tokens after JWKS refresh failed against Entra ID. Clients received HTTP 401 Unauthorized across authenticated routes.
+
+Environment: Production
+Cloud: Azure
+Affected service: customer-api / Entra ID / ingress-oauth
+Customer impact: Logged-in customers cannot load account or order history; mobile forced re-login loops.
+
+Application logs
+
+2026-08-07T08:10:14.220Z INFO  trace_id=aaa111bb service=customer-api method=GET path=/api/v1/me status=200 duration_ms=45
+2026-08-07T08:10:51.881Z ERROR trace_id=ccc222dd service=customer-api method=GET path=/api/v1/me status=401 duration_ms=18
+2026-08-07T08:10:51.882Z ERROR trace_id=ccc222dd auth_error={"code":"invalid_token","message":"JWT signature verification failed","issuer":"https://login.microsoftonline.com/{tenant}/v2.0"}
+2026-08-07T08:11:12.440Z WARN  service=customer-api jwks_refresh_failed=true last_success_age_s=3602
+2026-08-07T08:11:40.119Z ERROR service=mobile-app dependency=customer-api status=401 message="Unauthorized"
+2026-08-07T08:12:05.770Z WARN  service=entra error_rate=0.42 endpoint=/common/discovery/keys
+2026-08-07T08:12:44.221Z INFO  service=customer-api auth_fail_count=620 period=5m
+2026-08-07T08:13:10.009Z ERROR service=customer-api message="OIDC issuer mismatch after config reload"
+
+Next actions: Verify Entra JWKS reachability, clock skew, and recent OIDC client secret/issuer config changes. Restore JWKS cache and re-test /api/v1/me.
+
+---
+
+title INC000Q7B9A3D | AWS Cognito JWT rejection storm on orders-api
+
+Incident Overview
+Orders API started returning HTTP 401 after Cognito JWKS rotation while the service cached stale signing keys. Authenticated create-order calls failed signature checks.
+
+Environment: Production
+Cloud: AWS
+Affected service: orders-api / Cognito / API Gateway authorizer
+Customer impact: Authenticated checkout cannot place orders; guests unaffected.
+
+Application logs
+
+2026-08-07T09:28:33.550Z INFO  trace_id=eee333ff service=orders-api method=POST path=/api/v1/orders status=201 duration_ms=210
+2026-08-07T09:29:10.118Z ERROR trace_id=ggg444hh service=orders-api method=POST path=/api/v1/orders status=401 duration_ms=22
+2026-08-07T09:29:10.119Z ERROR trace_id=ggg444hh auth_error={"code":"invalid_token","message":"kid not found in JWKS","issuer":"https://cognito-idp.us-east-1.amazonaws.com/us-east-1_ABC"}
+2026-08-07T09:29:32.770Z WARN  service=orders-api jwks_cache_age_s=7200 force_refresh=false
+2026-08-07T09:30:01.441Z ERROR service=checkout-web dependency=orders-api status=401 message="Unauthorized"
+2026-08-07T09:30:28.880Z WARN  service=cognito UserAuthentication failures elevated
+2026-08-07T09:31:05.221Z INFO  service=orders-api auth_fail_count=540 period=5m
+2026-08-07T09:31:40.009Z ERROR service=apigw authorizer=cognito result=Deny
+
+Next actions: Force JWKS refresh, confirm Cognito user-pool issuer/audience, and roll authorizer. Validate authenticated order create.
+
+---
+
+title INC000R8C0B4E | GCP IAP / Identity Platform auth failures on admin-api
+
+Incident Overview
+Admin console APIs rejected sessions after Identity Platform token audience checks started failing. Operators saw HTTP 401/403 on previously working admin routes.
+
+Environment: Production
+Cloud: GCP
+Affected service: admin-api / Identity Platform / IAP
+Customer impact: Internal operators cannot manage catalogs or refunds; break-glass required.
+
+Application logs
+
+2026-08-07T10:55:08.100Z INFO  trace_id=iii555jj service=admin-api method=GET path=/api/v1/admin/users status=200 duration_ms=70
+2026-08-07T10:55:44.771Z ERROR trace_id=kkk666ll service=admin-api method=GET path=/api/v1/admin/users status=401 duration_ms=15
+2026-08-07T10:55:44.772Z ERROR trace_id=kkk666ll auth_error={"code":"invalid_audience","message":"token aud does not match expected client_id"}
+2026-08-07T10:56:08.440Z WARN  service=admin-api expected_aud=admin-console-prod actual_aud=admin-console-staging
+2026-08-07T10:56:35.119Z ERROR service=admin-ui dependency=admin-api status=401 message="Unauthorized"
+2026-08-07T10:57:02.880Z WARN  service=iap backend_auth_fail_ratio=0.51
+2026-08-07T10:57:40.221Z INFO  service=admin-api auth_fail_count=310 period=5m
+2026-08-07T10:58:11.009Z ERROR service=admin-api message="OIDC client_id swapped during config deploy"
+
+Next actions: Roll back admin OIDC client_id / audience config, invalidate bad sessions, verify IAP. Re-test admin user list.
+
+---
+
+title INC000S9D1C5F | Ops LDAP bind failures cascading to support-portal
+
+Incident Overview
+Support portal logins failed when LDAP binds to the corporate directory started timing out. Auth middleware returned HTTP 401; agents could not access tickets.
+
+Environment: Production
+Cloud: Ops
+Affected service: support-portal / LDAP / auth-gateway
+Customer impact: Support agents locked out; ticket handling SLA at risk.
+
+Application logs
+
+2026-08-07T11:40:22.330Z INFO  trace_id=mmm777nn service=support-portal method=POST path=/login status=302 duration_ms=180
+2026-08-07T11:40:59.001Z ERROR trace_id=ooo888pp service=support-portal method=POST path=/login status=401 duration_ms=5008
+2026-08-07T11:40:59.002Z ERROR trace_id=ooo888pp auth_error={"code":"ldap_bind_failed","message":"Can't contact LDAP server"}
+2026-08-07T11:41:20.770Z WARN  service=auth-gateway ldap_host=ldap.corp.local connect_timeout=true
+2026-08-07T11:41:48.441Z ERROR service=agent-desktop dependency=support-portal status=401 message="Unauthorized"
+2026-08-07T11:42:15.118Z WARN  service=ldap unavailable_replicas=2/3
+2026-08-07T11:42:50.880Z INFO  service=support-portal auth_fail_count=280 period=5m
+2026-08-07T11:43:22.009Z ERROR service=auth-gateway message="All LDAP servers unreachable from auth-gateway pod"
+
+Next actions: Check LDAP VIP health, network ACLs from auth-gateway, and recent firewall changes. Restore directory path; verify agent login.
+
+---
+
+title INC000T0E2D6A | Azure API Management subscription key / JWT dual-auth failures
+
+Incident Overview
+Partner APIs behind APIM started rejecting calls with 401 after a policy change required both subscription key and JWT, while many partners still sent only a key.
+
+Environment: Production
+Cloud: Azure
+Affected service: APIM / partner-api
+Customer impact: Partner inventory and shipment webhooks rejected; backlog of retries.
+
+Application logs
+
+2026-08-07T12:15:11.550Z INFO  trace_id=qqq999rr service=apim method=POST path=/partner/v1/shipments status=202 duration_ms=90
+2026-08-07T12:15:48.118Z ERROR trace_id=sss000tt service=apim method=POST path=/partner/v1/shipments status=401 duration_ms=12
+2026-08-07T12:15:48.119Z ERROR trace_id=sss000tt auth_error={"code":"Unauthorized","message":"JWT is missing or invalid; subscription key alone not accepted"}
+2026-08-07T12:16:10.770Z WARN  service=apim policy=validate-jwt enabled=true require_subscription_key=true
+2026-08-07T12:16:38.441Z ERROR service=partner-system dependency=apim status=401 message="Unauthorized"
+2026-08-07T12:17:05.880Z WARN  service=apim unauthorized_count=410 period=5m
+2026-08-07T12:17:40.221Z INFO  service=partner-api auth_fail_count=410 period=5m
+2026-08-07T12:18:11.009Z ERROR service=apim message="Breaking auth policy deployed without partner migration window"
+
+Next actions: Roll back or dual-run APIM auth policy, notify partners, monitor 401 rate. Confirm shipment webhook success.
+
+================================================================================
+# TYPE: QUEUE_BACKLOG — messaging backlog / consumer lag
+================================================================================
+
+title INC000U1F3E7B | GCP Pub/Sub order-events consumer lag growing
+
+Incident Overview
+Order-event subscription backlog grew rapidly after consumers started erroring on poison messages. End-to-end order status updates delayed by tens of minutes.
+
+Environment: Production
+Cloud: GCP
+Affected service: Pub/Sub / order-events-consumer / pubsub-order-events
+Customer impact: Customers see stale order status; warehouse pick tickets delayed.
+
+Application logs
+
+2026-08-07T08:35:10.100Z INFO  trace_id=uuu111vv service=order-events-consumer msg_id=1001 status=acked lag_s=2
+2026-08-07T08:35:48.771Z ERROR trace_id=www222xx service=order-events-consumer msg_id=1044 status=nacked error="json decode failed"
+2026-08-07T08:35:48.772Z WARN  service=pubsub subscription=order-events-sub num_undelivered=128400 oldest_unacked_age_s=1420
+2026-08-07T08:36:12.440Z ERROR service=order-events-consumer panic="nil pointer in handler" restart_count=18
+2026-08-07T08:36:40.119Z WARN  service=pubsub delivery_attempts_p95=9
+2026-08-07T08:37:05.880Z ERROR service=status-api message="event lag exceeds SLA" lag_s=1500
+2026-08-07T08:37:42.221Z INFO  service=pubsub push_backoff=true
+2026-08-07T08:38:10.009Z WARN  service=order-events-consumer consumer_replicas=3 desired=12
+
+Next actions: Quarantine poison messages, scale consumers, fix decoder bug. Drain backlog and verify status freshness.
+
+---
+
+title INC000V2A4F8C | AWS SQS payments-settlement queue depth critical
+
+Incident Overview
+Settlement workers fell behind after a surge of SQS messages and elevated visibility timeouts. Queue depth and age-of-oldest-message breached alerts.
+
+Environment: Production
+Cloud: AWS
+Affected service: SQS / settlement-worker / payments-settlement
+Customer impact: Merchant payouts delayed; finance reconciliation incomplete.
+
+Application logs
+
+2026-08-07T09:50:22.330Z INFO  trace_id=yyy333zz service=settlement-worker msg_id=m-9001 status=deleted lag_s=5
+2026-08-07T09:51:01.001Z ERROR trace_id=a1a1b2b2 service=settlement-worker msg_id=m-9440 status=retry error="downstream 504 from ledger-api"
+2026-08-07T09:51:01.002Z WARN  service=sqs queue=payments-settlement ApproximateNumberOfMessages=85400 ApproximateAgeOfOldestMessage=2100
+2026-08-07T09:51:28.770Z ERROR service=settlement-worker visibility_timeout_expired=true
+2026-08-07T09:51:55.441Z WARN  service=cloudwatch metric=ApproximateNumberOfMessagesVisible value=85400
+2026-08-07T09:52:22.118Z ERROR service=finance-batch message="settlement lag exceeds SLA" lag_s=2200
+2026-08-07T09:53:00.880Z INFO  service=sqs ReceiveMessage empty_polls rising
+2026-08-07T09:53:30.009Z WARN  service=settlement-worker desired_tasks=40 running=8
+
+Next actions: Scale settlement workers, fix ledger-api timeouts, adjust visibility timeout. Drain SQS and confirm payouts resume.
+
+---
+
+title INC000W3B5A9D | Azure Service Bus shipping-events backlog
+
+Incident Overview
+Shipping-events topic subscription lagged after consumers crashed on schema mismatch. Dead-letter queue filled; warehouse systems missed ship-confirm events.
+
+Environment: Production
+Cloud: Azure
+Affected service: Service Bus / shipping-consumer / sb-shipping-events
+Customer impact: Tracking numbers not published; customer notifications delayed.
+
+Application logs
+
+2026-08-07T10:22:08.550Z INFO  trace_id=c3c3d4d4 service=shipping-consumer msg_id=sb-2001 status=completed lag_s=3
+2026-08-07T10:22:46.118Z ERROR trace_id=e5e5f6f6 service=shipping-consumer msg_id=sb-2088 status=abandoned error="unknown field ship_method_v2"
+2026-08-07T10:22:46.119Z WARN  service=servicebus subscription=shipping-events active_message_count=64200 deadletter_count=1800
+2026-08-07T10:23:12.770Z ERROR service=shipping-consumer restart_count=24 reason=SchemaValidationError
+2026-08-07T10:23:40.441Z WARN  service=servicebus oldest_message_enqueue_time_age_s=1900
+2026-08-07T10:24:08.880Z ERROR service=tracking-api message="missing ship confirms" lag_s=1950
+2026-08-07T10:24:45.221Z INFO  service=servicebus prefetch_count=50
+2026-08-07T10:25:12.009Z WARN  service=shipping-consumer replicas=2 desired=10
+
+Next actions: Fix schema compatibility, reprocess dead-letters, scale consumers. Verify tracking updates catch up.
+
+---
+
+title INC000X4C6B0E | Ops Kafka payments.fraud consumer group lag
+
+Incident Overview
+Fraud-scoring consumer group lag grew after partition assignment stuck and handlers timed out calling the rules engine. Kafka lag alerts fired continuously.
+
+Environment: Production
+Cloud: Ops
+Affected service: Kafka / fraud-consumer / topic payments.fraud
+Customer impact: Fraud checks delayed; some payments held in review longer than SLA.
+
+Application logs
+
+2026-08-07T11:12:19.100Z INFO  trace_id=g7g7h8h8 service=fraud-consumer partition=3 offset=991200 lag=12
+2026-08-07T11:12:55.771Z ERROR trace_id=i9i9j0j0 service=fraud-consumer partition=3 offset=991880 error="rules-engine timeout 5s"
+2026-08-07T11:12:55.772Z WARN  service=kafka group=fraud-consumers topic=payments.fraud total_lag=220000 max_lag_partition=3
+2026-08-07T11:13:22.440Z ERROR service=fraud-consumer rebalance_in_progress=true members=2 expected=8
+2026-08-07T11:13:50.119Z WARN  service=rules-engine p95_latency_ms=5200 error_rate=0.18
+2026-08-07T11:14:18.880Z ERROR service=payments-api message="fraud decision lag" lag_s=1600
+2026-08-07T11:14:55.221Z INFO  service=kafka fetch_max_wait_ms=500
+2026-08-07T11:15:22.009Z WARN  service=fraud-consumer desired_replicas=8 running=2
+
+Next actions: Stabilize rules-engine, restore consumer membership, increase parallelism. Drain lag and confirm fraud SLA.
+
+---
+
+title INC000Y5D7C1F | AWS Kinesis clickstream processor iterator lag
+
+Incident Overview
+Clickstream processors reported MillisBehindLatest climbing after a bad deploy increased per-record processing time. Downstream analytics dashboards went stale.
+
+Environment: Production
+Cloud: AWS
+Affected service: Kinesis / clickstream-processor / clickstream-prod
+Customer impact: Real-time personalization and ops dashboards lag 20+ minutes.
+
+Application logs
+
+2026-08-07T12:05:33.550Z INFO  trace_id=k1k1l2l2 service=clickstream-processor shard=shardId-0001 millis_behind=1200
+2026-08-07T12:06:10.118Z ERROR trace_id=m3m3n4n4 service=clickstream-processor shard=shardId-0001 error="handler exceeded 2s budget"
+2026-08-07T12:06:10.119Z WARN  service=kinesis stream=clickstream-prod MillisBehindLatest=1280000
+2026-08-07T12:06:38.770Z ERROR service=clickstream-processor iterator_age_ms=1280000
+2026-08-07T12:07:05.441Z WARN  service=cloudwatch GetRecords.IteratorAgeMilliseconds=1280000
+2026-08-07T12:07:32.880Z ERROR service=analytics-api message="clickstream freshness breach" lag_s=1280
+2026-08-07T12:08:10.221Z INFO  service=clickstream-processor enhanced_fanout=false
+2026-08-07T12:08:40.009Z WARN  service=clickstream-processor desired_shards_consumers=16 running=4
+
+Next actions: Roll back slow handler, scale consumers / enable enhanced fan-out, split hot shards if needed. Confirm MillisBehindLatest returns to baseline.

@@ -2,8 +2,7 @@
  * The engineer console — the screen that actually gets used all day.
  *
  * Everything here optimises one number: clicks from "a ticket arrived" to "a decision
- * is accepted". That number is two. The keyboard path is one, and it is advertised on
- * screen, because an unadvertised shortcut is a shortcut nobody uses.
+ * is accepted". That number is two.
  *
  * The table is server-side and the tiles come from the analytics endpoint — no total
  * on this page is computed in the browser from the page of rows it happens to hold.
@@ -13,31 +12,21 @@ import {
   ExclamationCircleOutlined,
   FileTextOutlined,
   HourglassOutlined,
-  QuestionCircleOutlined,
   ReloadOutlined,
   SafetyCertificateOutlined,
 } from "@ant-design/icons";
 import { useQuery } from "@tanstack/react-query";
-import { Button, Card, Col, Flex, Input, Row, Select, Space, Tooltip, Typography } from "antd";
+import { Button, Card, Col, Flex, Input, Row, Select, Typography } from "antd";
 import type { InputRef } from "antd";
 import { useEffect, useMemo, useRef } from "react";
 
-import { api, type TicketListParams, type TicketRow } from "../api/client";
+import { api, meQueryKey, type TicketListParams, type TicketRow } from "../api/client";
 import DecisionDrawer from "../components/DecisionDrawer";
 import { SEVERITY_OPTIONS, STATUS_OPTIONS } from "../components/SeverityTag";
 import StatTile from "../components/StatTile";
 import TicketTable from "../components/TicketTable";
 import { isManagerRole } from "../layouts/AppLayout";
 import { useUiStore } from "../store/ui";
-
-const SHORTCUTS = [
-  ["j / k", "Move selection"],
-  ["Enter", "Open the decision"],
-  ["a", "Accept"],
-  ["o", "Override"],
-  ["/", "Focus search"],
-  ["Esc", "Close"],
-];
 
 function toParams(filters: ReturnType<typeof useUiStore.getState>["queueFilters"]): TicketListParams {
   const { q, page, page_size, sort, order, ...rest } = filters;
@@ -65,7 +54,7 @@ export default function Queue() {
   const searchRef = useRef<InputRef>(null);
 
   const { data: me } = useQuery({
-    queryKey: ["me"],
+    queryKey: meQueryKey(),
     queryFn: () => api.me().then((r) => r.data),
     staleTime: 5 * 60_000,
   });
@@ -158,27 +147,9 @@ export default function Queue() {
           </p>
         </Flex>
 
-        <Space>
-          <Tooltip
-            title={
-              <div className="keyboard-hint">
-                {SHORTCUTS.map(([keys, description]) => (
-                  <div key={keys} style={{ display: "flex", gap: 8, justifyContent: "space-between" }}>
-                    <kbd>{keys}</kbd>
-                    <span>{description}</span>
-                  </div>
-                ))}
-              </div>
-            }
-          >
-            <Button icon={<QuestionCircleOutlined />} aria-label="Keyboard shortcuts">
-              Shortcuts
-            </Button>
-          </Tooltip>
-          <Button icon={<ReloadOutlined />} loading={queue.isFetching} onClick={() => queue.refetch()}>
-            Refresh
-          </Button>
-        </Space>
+        <Button icon={<ReloadOutlined />} loading={queue.isFetching} onClick={() => queue.refetch()}>
+          Refresh
+        </Button>
       </Flex>
 
       <Row gutter={[16, 16]}>

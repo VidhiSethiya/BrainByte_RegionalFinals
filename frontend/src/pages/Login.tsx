@@ -2,18 +2,17 @@
  * Two consoles, one file.
  *
  * `/login` is the team console, `/manager/login` the manager console. Same form,
- * different copy and a different default landing — duplicating the file is how the
- * two drift apart. The team picker prefills a username as a convenience; the actual
- * authority is the role in the JWT, which is what decides the redirect.
+ * different copy and a different default landing. Username + password alone decide
+ * identity — the role in the JWT decides the redirect.
  */
 
-import { App, Button, Card, Flex, Form, Input, Select, Typography } from "antd";
+import { App, Button, Card, Flex, Form, Input, Typography } from "antd";
+import { useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 
-import { api, auth, type Team } from "../api/client";
+import { api, auth, meQueryKey } from "../api/client";
 import Logo from "../components/Logo";
-import { TEAM_OPTIONS } from "../components/SeverityTag";
 
 const TAGLINE = "An enterprise AI ticket intelligence platform";
 
@@ -21,16 +20,12 @@ const MODES = {
   team: {
     title: "TicketSphere — Team Console",
     subtitle: "Sign in to your team queue",
-    hint: "Demo account: aws1 / aws123",
-    initial: { username: "aws1", password: "aws123" },
     switchTo: "/manager/login",
     switchLabel: "Sign in to the manager console",
   },
   manager: {
     title: "TicketSphere — Manager Console",
     subtitle: "Queue oversight, approvals and history",
-    hint: "Demo account: manager / manager123",
-    initial: { username: "manager", password: "manager123" },
     switchTo: "/login",
     switchLabel: "Sign in to a team console",
   },
@@ -43,6 +38,7 @@ function landingFor(role: string) {
 
 export default function Login({ mode = "team" }: { mode?: "team" | "manager" }) {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const { message: toast } = App.useApp();
   const [form] = Form.useForm();
   const [loading, setLoading] = useState(false);
@@ -52,7 +48,10 @@ export default function Login({ mode = "team" }: { mode?: "team" | "manager" }) 
     setLoading(true);
     try {
       const { data } = await api.login(values.username, values.password);
+      // Wipe previous session caches (nav role, tickets) before binding the new JWT.
+      queryClient.clear();
       auth.set(data.token);
+      queryClient.setQueryData(meQueryKey(), data.user);
       toast.success(`Signed in as ${data.user.username} · ${data.user.role}`);
       navigate(landingFor(data.user.role), { replace: true });
     } catch (error: any) {
@@ -79,32 +78,7 @@ export default function Login({ mode = "team" }: { mode?: "team" | "manager" }) 
             <Typography.Text type="secondary">{copy.subtitle}</Typography.Text>
           </Flex>
 
-          <Form
-            form={form}
-            layout="vertical"
-            onFinish={onFinish}
-            initialValues={copy.initial}
-            requiredMark={false}
-          >
-            {mode === "team" && (
-              <Form.Item
-                name="team"
-                label={<span className="label">Team</span>}
-                extra="Prefills the demo username. Access is granted by your token, not this picker."
-              >
-                <Select
-                  allowClear
-                  placeholder="Select your team"
-                  options={TEAM_OPTIONS}
-                  onChange={(team: Team) =>
-                    form.setFieldsValue(
-                      team ? { username: `${team}1`, password: `${team}123` } : { username: "", password: "" }
-                    )
-                  }
-                />
-              </Form.Item>
-            )}
-
+          <Form form={form} layout="vertical" onFinish={onFinish} requiredMark={false}>
             <Form.Item
               name="username"
               label={<span className="label">Username</span>}
@@ -126,14 +100,9 @@ export default function Login({ mode = "team" }: { mode?: "team" | "manager" }) 
             </Button>
           </Form>
 
-          <Flex justify="space-between" align="center" wrap gap={8}>
-            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-              {copy.hint}
-            </Typography.Text>
-            <Link to={copy.switchTo} style={{ fontSize: 12 }}>
-              {copy.switchLabel}
-            </Link>
-          </Flex>
+          <Link to={copy.switchTo} style={{ fontSize: 12 }}>
+            {copy.switchLabel}
+          </Link>
         </Flex>
       </Card>
     </Flex>

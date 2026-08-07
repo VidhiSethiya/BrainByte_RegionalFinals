@@ -631,7 +631,7 @@ principle as `ticket_stats`, just for platform telemetry instead of ticket count
 | Screen | Route | Who | Shows |
 |---|---|---|---|
 | Queue | `/queue` | engineer | own team's open tickets, severity/priority/SLA countdown, decision drawer with citations |
-| History | `/history` | both | past tickets, ACL-scoped, same decision drawer in read-only mode |
+| History | `/history` | both | past tickets, ACL-scoped; decision drawer + timeline (AI → override → approval → sync) |
 | Triage | `/triage` | both | live node-by-node graph execution for one pasted ticket |
 | Control Tower | `/control` | manager | KPI tiles, charts, approval queue, override with mandatory reason |
 | Chat (Assistant) | `/chat` | manager | multi-session KB Q&A with citations |
@@ -639,7 +639,9 @@ principle as `ticket_stats`, just for platform telemetry instead of ticket count
 | Dashboard | `/dashboard` | both | requests, latency, token spend, error rate |
 | Knowledge Base | `/documents` | both | server-side paginated table, PII-masked count |
 | Evaluations | `/evals` | manager | classification accuracy, routing precision, severity MAE, confusion matrix, retrieval A/B |
-| Audit Trail | `/audit` | manager | every action, hash chain verification |
+
+Hash-chained `audit_log` still records every action server-side (`/api/audit`); the UI
+surface for that story is History’s per-ticket timeline, not a separate Audit Trail page.
 
 Evals are two separate runs, not one: `POST /api/evals/run` scores the general KB
 `EVAL_SET` (12 questions, ≥2 that must be refused) against `guardrails/validators.py`;
