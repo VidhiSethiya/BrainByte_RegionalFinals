@@ -161,6 +161,19 @@ def resolve_provider() -> dict[str, Any]:
     return _provider
 
 
+def _effective_temperature(model: str, temperature: float) -> float:
+    """Clamp temperature for models that reject deterministic sampling.
+
+    GenAI Lab / LiteLLM: gpt-5* (incl. genailab-maas-gpt-5.1) reject temperature=0
+    and only accept temperature=1. Without this, every deep-tier chat_json call
+    (severity / reflect) dies with UnsupportedParamsError mid-triage.
+    """
+    name = model.lower()
+    if "gpt-5" in name or "/o1" in name or name.startswith("o1") or "/o3" in name:
+        return 1.0
+    return temperature
+
+
 @lru_cache(maxsize=8)
 def get_llm(
     tier: ModelTier | None = None,
@@ -190,9 +203,10 @@ def get_llm(
             "deep": settings.REASONING_MODEL,
         }[resolved]
 
+    temp = settings.LLM_TEMPERATURE if temperature is None else temperature
     return ChatOpenAI(
         model=model,
-        temperature=settings.LLM_TEMPERATURE if temperature is None else temperature,
+        temperature=_effective_temperature(model, temp),
         max_retries=settings.LLM_MAX_RETRIES,
         timeout=settings.LLM_TIMEOUT_SECONDS,
         **_client_kwargs(p["base_url"], p["api_key"]),

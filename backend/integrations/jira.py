@@ -44,6 +44,22 @@ STATUS_TO_TRANSITION_NAME: dict[str, str] = {
     "resolved": "Done",
 }
 
+# Four Priority groups in declining order — stock Jira Software names on the
+# TicketSphere SCRUM board. Maps TicketSphere severity S1–S4.
+SEVERITY_TO_PRIORITY_NAME: dict[str, str] = {
+    "S1": "Highest",
+    "S2": "High",
+    "S3": "Medium",
+    "S4": "Low",
+}
+
+
+def priority_group(severity: str | None) -> str:
+    """Map TicketSphere S1–S4 to one of the four Jira Priority groups."""
+    if not severity:
+        return ""
+    return SEVERITY_TO_PRIORITY_NAME.get(str(severity).upper(), "")
+
 
 class JiraError(RuntimeError):
     pass
@@ -160,7 +176,8 @@ class JiraSource(TicketSource):
     #
     # Rather than block write-back on someone creating four custom fields, this
     # writes onto what the board already has, today, with zero admin setup:
-    #   severity        -> native Priority field (S1->Highest .. S4->Low)
+    #   severity        -> native Priority by name (4 groups declining):
+    #                      S1→Highest, S2→High, S3→Medium, S4→Low
     #   team/severity   -> labels — team as a short board code (AWS/AZR/GCP/OPS,
     #                      matching how the rest of the org already tags issues),
     #                      severity as ticketsphere-severity-<x>
@@ -168,7 +185,6 @@ class JiraSource(TicketSource):
     # JIRA_FIELD_* stay honoured *additionally* if a team later adds real custom
     # fields — set is set, but nothing here depends on them existing.
 
-    _SEVERITY_TO_PRIORITY_ID = {"S1": "1", "S2": "2", "S3": "3", "S4": "4"}  # id "5"=Lowest unused
     _TEAM_TO_LABEL = {"aws": "AWS", "azure": "AZR", "gcp": "GCP", "ops": "OPS"}
 
     def update(self, external_id: str, fields: dict[str, Any]) -> None:
@@ -177,9 +193,10 @@ class JiraSource(TicketSource):
 
         severity = fields.get("severity")
         if severity:
-            priority_id = self._SEVERITY_TO_PRIORITY_ID.get(severity)
-            if priority_id:
-                set_fields["priority"] = {"id": priority_id}
+            # Prefer name over hardcoded ids — names are stable across sites.
+            pname = priority_group(str(severity))
+            if pname:
+                set_fields["priority"] = {"name": pname}
             label_adds.append(f"ticketsphere-severity-{severity}")
 
         team = fields.get("assigned_team")
@@ -265,7 +282,7 @@ def who(user_obj: dict | None) -> str:
     real board: reporter/assignee came back with displayName + accountId only,
     no email. displayName is the identifier that is actually present.
 
-    Module-level, not a method, so both JiraSource._to_ticket_dict() (the poller
+    Module-level, not a method, so both JiraSource.fetch_since() (the poller
     path) and api.py's webhook route (a second, independent ingestion path) call
     the same extraction logic rather than two copies that can drift apart — which
     is exactly what happened the first time: the webhook route built its raw

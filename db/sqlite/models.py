@@ -364,10 +364,36 @@ _DEMO_USERS = [
 ]
 
 
+def _migrate_sqlite_columns() -> None:
+    """Additive column sync for tables that already exist.
+
+    create_all() does not ALTER existing tables. TicketSphere added reporter/
+    assignee (and may add more) after early demos created tickets without them —
+    without this, every Jira poll dies with OperationalError: no such column.
+    """
+    needed = {
+        "tickets": {
+            "reporter": "VARCHAR DEFAULT ''",
+            "assignee": "VARCHAR DEFAULT ''",
+        },
+    }
+    with engine.begin() as conn:
+        for table, cols in needed.items():
+            existing = {
+                row[1] for row in conn.exec_driver_sql(f"PRAGMA table_info({table})").fetchall()
+            }
+            if not existing:
+                continue  # table not created yet; create_all handles it
+            for name, ddl in cols.items():
+                if name not in existing:
+                    conn.exec_driver_sql(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}")
+
+
 def init_db() -> None:
     """Create tables and TicketSphere demo users. Safe to call on every boot."""
     settings.ensure_dirs()
     Base.metadata.create_all(engine)
+    _migrate_sqlite_columns()
     with SessionLocal() as s:
         for username, password, role, clearances in _DEMO_USERS:
             if s.query(User).filter_by(username=username).first():
