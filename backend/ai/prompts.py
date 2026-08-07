@@ -260,21 +260,10 @@ Return JSON only:
 # ticket text needs turning into a standalone search query.
 
 # --- grade (CRAG) -----------------------------------------------------------
-
-RETRIEVAL_GRADE_PROMPT = """Decide whether the retrieved chunks actually help resolve
-this ticket, or whether retrieval should be retried with a different query.
-
-TICKET SUMMARY: {ticket_summary}
-
-RETRIEVED CHUNKS:
-{chunks}
-
-A chunk is relevant if it describes the same symptom, the same service, the same
-error code, or a documented fix for this class of problem. A precedent ticket about
-an unrelated service is not relevant just because it shares a severity level.
-
-Return JSON only:
-{{"sufficient": true|false, "relevant_ids": ["C1", "C3"], "retry_query": "<a better search query, or empty string if sufficient>"}}"""
+# No prompt here — grading is owned by the RAG workstream: rag.rag_retriever
+# defines its own CRAG_GRADE_PROMPT and exposes grade_chunks(query, chunks, trace).
+# The triage graph calls that, not a duplicate prompt of its own. See
+# .claude/plans/rag-handoff.md §2.2.
 
 # --- classify --------------------------------------------------------------
 
@@ -296,12 +285,13 @@ RETRIEVED CONTEXT (precedent tickets, runbooks, service catalogue):
 Categories: infrastructure, database, networking, application-error, deployment,
 security, access-request, performance, integration, data-quality.
 
-Return JSON only:
+Return JSON only, matching this schema exactly (TriageVerdict in rag/schemas.py):
 {{
   "category": "<one of the categories above, exactly as spelled>",
   "subcategory": "<a more specific label you choose, e.g. connection-pool-exhaustion>",
+  "service": "<the affected service/application name>",
   "confidence": 0.0-1.0,
-  "reasoning": "<one sentence; cite [C#] where you used retrieved evidence>"
+  "rationale": "<one sentence; cite [C#] where you used retrieved evidence>"
 }}"""
 )
 
@@ -337,13 +327,13 @@ Severity definitions — do not deviate from these:
   production-bound issue
 - S4: cosmetic, informational, or a request with no active failure
 
-Return JSON only:
+Return JSON only, matching this schema exactly (SeverityVerdict in rag/schemas.py):
 {{
   "severity": "S1|S2|S3|S4",
   "priority_score": 0-100,
   "sla_target_mins": <integer, taken from the SLA policy for this severity>,
   "confidence": 0.0-1.0,
-  "reasoning": "<one or two sentences; cite [C#] for the SLA figure and any precedent used>"
+  "rationale": "<one or two sentences; cite [C#] for the SLA figure and any precedent used>"
 }}"""
 )
 
@@ -362,8 +352,8 @@ CONTEXT (service catalogue, team capacity):
 
 Teams: ops, azure, aws, gcp.
 
-Return JSON only:
-{{"assigned_team": "ops|azure|aws|gcp", "confidence": 0.0-1.0, "reasoning": "<one sentence; cite [C#] for the catalogue entry used>"}}"""
+Return JSON only, matching this schema exactly (RoutingVerdict in rag/schemas.py):
+{{"assigned_team": "ops|azure|aws|gcp", "confidence": 0.0-1.0, "rationale": "<one sentence; cite [C#] for the catalogue entry used>"}}"""
 
 # --- reflect -----------------------------------------------------------------
 # Self-critique against the cited evidence, not against its own prior reasoning.
@@ -387,13 +377,17 @@ Check specifically:
   a matching precedent or SLA line?
 - Does the service catalogue actually assign this team, or was the team guessed from
   the service name alone?
-- Is there a more specific precedent ticket that was available but not used?
+- Is there a more specific precedent ticket that was available but not used, or was
+  key evidence missing entirely (a case for retrying retrieval, not for guessing)?
 
-You may only report a confidence at or below the stated confidence — never above it.
-If you find no issue, return the same confidence with an empty issues_found list.
-
-Return JSON only:
-{{"adjusted_confidence": 0.0-1.0, "issues_found": ["..."], "escalate": true|false}}"""
+Return JSON only, matching this schema exactly (ReflectionVerdict in rag/schemas.py):
+{{
+  "pass_check": true|false,
+  "lower_confidence_to": <a number at or below {confidence}, or null if you found no issue — never above {confidence}>,
+  "issues": ["..."],
+  "retry_enrich": true|false,
+  "rationale": "<one sentence>"
+}}"""
 
 # --- duplicate detection -----------------------------------------------------
 
@@ -409,8 +403,8 @@ Two tickets about the same outage reported by different people are duplicates ev
 the wording differs. Two tickets about the same service but a different symptom are
 not duplicates.
 
-Return JSON only:
-{{"is_duplicate": true|false, "duplicate_of": "<candidate ticket id, or empty string>", "confidence": 0.0-1.0}}"""
+Return JSON only, matching this schema exactly (DuplicateVerdict in rag/schemas.py):
+{{"is_duplicate": true|false, "duplicate_of": "<candidate ticket id, or empty string>", "confidence": 0.0-1.0, "rationale": "<short>"}}"""
 
 # --- manager assistant: deterministic stats narration ------------------------
 # The counterpart to "the LLM never counts" (docs/JUDGES_QA.md). ticket_stats is a

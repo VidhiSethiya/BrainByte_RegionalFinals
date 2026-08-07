@@ -174,13 +174,22 @@ def get_llm(
     same breath as this signature. When both are given, `tier` wins.
     """
     resolved: ModelTier = tier or ("fast" if fast else "standard")
-    model = {
-        "fast": settings.FAST_LLM_MODEL,
-        "standard": settings.LLM_MODEL,
-        "deep": settings.REASONING_MODEL,
-    }[resolved]
-
     p = resolve_provider()
+
+    if p["name"] == "local":
+        # The three tiers collapse to whichever one chat model Ollama actually has
+        # pulled. The hosted-only ids in settings (azure/genailab-maas-...) do not
+        # exist on a local Ollama daemon and would 404 — this is what actually
+        # makes "falls back to local automatically" (docs/JUDGES_QA.md) true
+        # instead of aspirational when the hosted probe fails mid-session.
+        model = settings.LOCAL_CHAT_MODEL
+    else:
+        model = {
+            "fast": settings.FAST_LLM_MODEL,
+            "standard": settings.LLM_MODEL,
+            "deep": settings.REASONING_MODEL,
+        }[resolved]
+
     return ChatOpenAI(
         model=model,
         temperature=settings.LLM_TEMPERATURE if temperature is None else temperature,
@@ -193,8 +202,18 @@ def get_llm(
 @lru_cache(maxsize=1)
 def get_embeddings() -> OpenAIEmbeddings:
     p = resolve_provider()
+    # Same local/hosted split as get_llm() and for the same reason — a hosted
+    # embedding id would 404 against local Ollama once resolve_provider() has
+    # fallen back. NOTE the dimension trap this doesn't (and can't) solve: if the
+    # index was built with the hosted 3072-dim model and the gateway then drops
+    # mid-session, every subsequent query embeds at 1024-dim and silently
+    # mismatches the existing Chroma collection. That is an operational risk to
+    # manage on demo day (reseed after any embedding-model change, don't let a
+    # live fallback happen after the index is built), not something a client
+    # constructor can fix.
+    model = settings.LOCAL_EMBEDDING_MODEL if p["name"] == "local" else settings.EMBEDDING_MODEL
     return OpenAIEmbeddings(
-        model=settings.EMBEDDING_MODEL,
+        model=model,
         # Non-OpenAI models have no tiktoken encoding; skipping the length check keeps
         # gte-large working through the OpenAI-compatible client.
         check_embedding_ctx_length=False,
