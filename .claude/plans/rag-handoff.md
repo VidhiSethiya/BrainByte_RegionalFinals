@@ -182,7 +182,7 @@ from db.sqlite.models import (
 | `RETRIEVAL_MODE` | `hybrid` (BM25 + dense + RRF) |
 | `EMBEDDING_MODEL` | `azure/genailab-maas-text-embedding-3-large` — **do not change without full reseed** |
 | `TICKET_SOURCE` | `synthetic` today → set `jira` when adapter is live |
-| `ROLES` | `admin`, `manager`, `engineer`, `viewer` |
+| `ROLES` | `admin`, `manager`, `engineer` |
 | `TEAMS` | `ops`, `azure`, `aws`, `gcp` |
 
 Files: `backend/config.py`, `backend/.env.example`.
@@ -198,7 +198,7 @@ Demo users (JWT must carry `role` + `clearances`):
 | aws1 | aws123 | engineer | `["aws"]` |
 | gcp1 | gcp123 | engineer | `["gcp"]` |
 
-ACL: team membership is **clearances → `acl_<team>`** Chroma keys. Manager/admin with `all` bypass filters. Sensitivity ceiling: manager/admin → restricted, engineer → confidential, viewer → internal.
+ACL: team membership is **clearances → `acl_<team>`** Chroma keys. Manager/admin with `all` bypass filters. Sensitivity ceiling: manager/admin → restricted, engineer → confidential.
 
 ---
 

@@ -75,10 +75,14 @@ def main() -> int:
 
     init_db()
     if args.reset:
+        from db.sqlite.models import Document, SessionLocal as _Session
         from db.vectordb import vector_store
 
         vector_store.reset()
-        log.info("collection reset")
+        with _Session() as s:
+            s.query(Document).delete()
+            s.commit()
+        log.info("collection reset (chroma + documents mirror cleared)")
 
     directory = Path(args.path) if args.path else settings.SEED_DIR
     directory.mkdir(parents=True, exist_ok=True)
@@ -214,7 +218,12 @@ def _write_policy_docs(directory: Path, runbooks_dir: Path) -> None:
 
 
 def _upsert_ticket_rows(rows: list[dict]) -> None:
+    keep_ids = {(row["source"], row["external_id"]) for row in rows}
     with SessionLocal() as s:
+        # Drop stale synthetic rows so a 10-ticket generate does not leave 500 leftovers.
+        for old in s.query(Ticket).filter_by(source="synthetic").all():
+            if (old.source, old.external_id) not in keep_ids:
+                s.delete(old)
         for row in rows:
             existing = (
                 s.query(Ticket)

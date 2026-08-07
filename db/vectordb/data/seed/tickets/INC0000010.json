@@ -1,0 +1,17 @@
+{
+  "external_id": "INC0000010",
+  "source": "synthetic",
+  "title": "aks-prod-01: queue depth climbing past SLO",
+  "body": "Summary\naks-prod-01 \u2014 queue depth climbing past SLO\nDescription\nSeeing HTTP 502 on aks-prod-01 in prod. queue depth climbing past SLO.\nEnvironment\nprod\nLogs\n[INC0000010] HTTP 502 stack near handler; correlation 8837462910",
+  "application": "aks-prod-01",
+  "environment": "prod",
+  "channel": "synthetic",
+  "team": "azure",
+  "category": "performance",
+  "severity": "S2",
+  "resolved": false,
+  "resolution_minutes": null,
+  "true_category": "performance",
+  "true_severity": "S2",
+  "true_team": "azure"
+}

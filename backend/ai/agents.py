@@ -726,7 +726,9 @@ def triage_gate(state: TriageState) -> TriageState:
 def triage_sync(state: TriageState) -> TriageState:
     """Assembles the final TriageDecision and audits it. Does NOT call Jira —
     that write path is ai/tools.py::ticket_update (Phase 2), which is also where
-    the auto-approval band below is actually *enforced*, not just previewed."""
+    the auto-approval band below is actually *enforced*, not just previewed.
+    Adapter calls must receive Ticket.external_id (Jira key), never SQLite id —
+    ingest_and_triage / approve_ticket resolve that before write-back."""
     trace = state.get("trace")
     ticket = state["ticket"]
     needs_human = state.get("needs_human", False)
@@ -967,10 +969,15 @@ def ingest_and_triage(raw_ticket: dict, user: dict) -> tuple[TicketRow, TriageSt
                 row.needs_human = decision.needs_human
                 row.status = state.get("status", "triaged")
             else:
+                # Dead-letter: no TriageDecision — park failed + bump sync_attempts.
                 row.status = state.get("status", "failed")
-                row.last_error = state.get("blocked_reason", "") or state.get(
-                    "escalation_reason", ""
+                row.last_error = (
+                    state.get("blocked_reason", "")
+                    or state.get("escalation_reason", "")
+                    or "triage produced no decision"
                 )
+                if row.status == "failed":
+                    row.sync_attempts = (row.sync_attempts or 0) + 1
             s.commit()
 
             run = TriageRun(
@@ -989,6 +996,55 @@ def ingest_and_triage(raw_ticket: dict, user: dict) -> tuple[TicketRow, TriageSt
             s.add(run)
             s.commit()
             s.refresh(row)
+
+        # Auto-approve write-back: adapter sees external_id (Jira key), never SQLite UUID.
+        # ticket_update looks up the key; comment/transition use it explicitly.
+        if decision is not None and state.get("status") == "routed":
+            from ai.tools import ToolDenied, call as tool_call, get_ticket_source
+
+            fields = {
+                "severity": decision.severity,
+                "priority_score": decision.priority_score,
+                "assigned_team": decision.assigned_team,
+                "confidence": decision.confidence,
+            }
+            try:
+                tool_call(
+                    "ticket_update",
+                    row.id,
+                    fields,
+                    user=user,
+                    ticket_status="routed",
+                    confidence=decision.confidence,
+                    severity=decision.severity,
+                )
+            except ToolDenied as exc:
+                log.warning("auto-approve ticket_update denied for %s: %s", row.id, exc)
+            else:
+                external_key = (row.external_id or "").strip()
+                if not external_key:
+                    log.warning(
+                        "auto-approve comment/transition skipped for %s: missing external_id",
+                        row.id,
+                    )
+                else:
+                    try:
+                        src = get_ticket_source()
+                        src.add_comment(
+                            external_key,
+                            f"TicketSphere auto-approved: {decision.severity} · "
+                            f"{decision.assigned_team} · priority {decision.priority_score} · "
+                            f"confidence {decision.confidence:.0%}. "
+                            f"{(decision.rationale or '')[:400]}",
+                        )
+                        src.transition(external_key, "routed")
+                    except Exception as exc:  # noqa: BLE001
+                        log.warning(
+                            "auto-approve comment/transition failed for %s (%s): %s",
+                            row.id,
+                            external_key,
+                            exc,
+                        )
 
         audit.record(
             "ticket.ingested",

@@ -1,0 +1,17 @@
+{
+  "external_id": "INC0000008",
+  "source": "synthetic",
+  "title": "pubsub-ingest: queue depth climbing past SLO",
+  "body": "Summary\npubsub-ingest \u2014 queue depth climbing past SLO\nDescription\nSeeing HTTP 502 on pubsub-ingest in prod. queue depth climbing past SLO.\nEnvironment\nprod\nLogs\n[INC0000008] HTTP 502 stack near handler; correlation 8837462910",
+  "application": "pubsub-ingest",
+  "environment": "prod",
+  "channel": "synthetic",
+  "team": "gcp",
+  "category": "deployment",
+  "severity": "S4",
+  "resolved": false,
+  "resolution_minutes": null,
+  "true_category": "deployment",
+  "true_severity": "S4",
+  "true_team": "gcp"
+}

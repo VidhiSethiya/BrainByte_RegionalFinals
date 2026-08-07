@@ -1,0 +1,17 @@
+{
+  "external_id": "INC0000005",
+  "source": "synthetic",
+  "title": "edge-proxy: intermittent timeouts under load",
+  "body": "Summary\nedge-proxy \u2014 intermittent timeouts under load\nDescription\nSeeing ECONNRESET on edge-proxy in prod. intermittent timeouts under load.\nEnvironment\nprod\nLogs\n[INC0000005] ECONNRESET stack near handler; correlation 8837462910",
+  "application": "edge-proxy",
+  "environment": "prod",
+  "channel": "synthetic",
+  "team": "ops",
+  "category": "storage",
+  "severity": "S1",
+  "resolved": false,
+  "resolution_minutes": null,
+  "true_category": "storage",
+  "true_severity": "S1",
+  "true_team": "ops"
+}

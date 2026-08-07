@@ -1,0 +1,17 @@
+{
+  "external_id": "INC0000003",
+  "source": "synthetic",
+  "title": "rds-prod-01: sudden spike in 5xx responses",
+  "body": "Summary\nrds-prod-01 \u2014 sudden spike in 5xx responses\nDescription\nSeeing HTTP 502 on rds-prod-01 in prod. sudden spike in 5xx responses.\nEnvironment\nprod\nLogs\n[INC0000003] HTTP 502 stack near handler; correlation 8837462910",
+  "application": "rds-prod-01",
+  "environment": "prod",
+  "channel": "synthetic",
+  "team": "aws",
+  "category": "security",
+  "severity": "S3",
+  "resolved": false,
+  "resolution_minutes": null,
+  "true_category": "security",
+  "true_severity": "S3",
+  "true_team": "aws"
+}

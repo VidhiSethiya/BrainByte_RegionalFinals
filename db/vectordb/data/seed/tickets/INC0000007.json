@@ -1,0 +1,17 @@
+{
+  "external_id": "INC0000007",
+  "source": "synthetic",
+  "title": "rds-prod-01: intermittent timeouts under load",
+  "body": "Summary\nrds-prod-01 \u2014 intermittent timeouts under load\nDescription\nSeeing OOMKilled on rds-prod-01 in prod. intermittent timeouts under load.\nEnvironment\nprod\nLogs\n[INC0000007] OOMKilled stack near handler; correlation 8837462910",
+  "application": "rds-prod-01",
+  "environment": "prod",
+  "channel": "synthetic",
+  "team": "aws",
+  "category": "database",
+  "severity": "S3",
+  "resolved": false,
+  "resolution_minutes": null,
+  "true_category": "database",
+  "true_severity": "S3",
+  "true_team": "aws"
+}

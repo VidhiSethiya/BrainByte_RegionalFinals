@@ -54,7 +54,10 @@ def anonymize_document(doc: RAGDocument, use_llm: bool = True) -> tuple[RAGDocum
     masked, token_map = mask_text(scrubbed)
 
     if use_llm and len(masked) >= LLM_PASS_MIN_CHARS:
-        masked = _llm_pass(masked)
+        # Ticket bodies must keep INC… / error codes for hybrid BM25. Local/mini models
+        # often rewrite those into TOKEN_N and destroy lexical match — regex+secrets is enough.
+        if (doc.attributes or {}).get("doc_type") != "ticket_history":
+            masked = _llm_pass(masked)
 
     return doc.model_copy(update={"text": masked}), token_map
 

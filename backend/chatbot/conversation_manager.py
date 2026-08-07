@@ -13,7 +13,6 @@ Two surfaces share this handler:
 
 from __future__ import annotations
 
-from ai.agents import run_turn
 from chatbot import context_manager as context
 from chatbot import memory_manager as memory
 from chatbot import session_manager as sessions
@@ -30,6 +29,9 @@ def handle_message(request: ChatRequest, user: dict) -> ChatResponse:
     Sync (not async) so Flask routes and eval harnesses can call it directly.
     Signature and ChatResponse shape are frozen for Vidhi/Naman.
     """
+    # Lazy: avoids cycle agents → context_manager → chatbot → conversation_manager → agents
+    from ai.agents import run_turn
+
     with Trace("chat", user_id=user["id"]) as trace:
         session = sessions.resolve_session(request.session_id, user["id"], request.message)
 

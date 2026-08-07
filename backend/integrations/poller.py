@@ -30,6 +30,33 @@ _lock = threading.Lock()
 _stop = threading.Event()
 
 
+def _dead_letter_row(raw: dict[str, Any], source_name: str, exc: BaseException) -> None:
+    """If a TicketRow already exists for this external_id, mark failed and bump
+    sync_attempts. Used when ingest_and_triage raises before it can dead-letter."""
+    external_id = str(raw.get("external_id") or "").strip()
+    if not external_id:
+        return
+    ticket_source = str(raw.get("source") or source_name or "").strip() or source_name
+    try:
+        from db.sqlite.models import SessionLocal
+        from db.sqlite.models import Ticket as TicketRow
+
+        with SessionLocal() as s:
+            row = (
+                s.query(TicketRow)
+                .filter_by(source=ticket_source, external_id=external_id)
+                .first()
+            )
+            if row is None:
+                return
+            row.status = "failed"
+            row.last_error = str(exc)[:500] or "ingest_and_triage raised"
+            row.sync_attempts = (row.sync_attempts or 0) + 1
+            s.commit()
+    except Exception as db_exc:  # noqa: BLE001 - dead-letter must not break the poll batch
+        log.error("poll: dead-letter update failed for %s: %s", external_id, db_exc)
+
+
 def poll_once() -> dict[str, Any]:
     """Fetch everything new since the last watermark and triage it. Safe to call
     concurrently with the background loop — the lock serialises actual polls so
@@ -66,6 +93,7 @@ def poll_once() -> dict[str, Any]:
                 failed += 1
                 log.error("poll: ingest_and_triage failed for %s: %s",
                            raw.get("external_id"), exc)
+                _dead_letter_row(raw, source.name, exc)
 
             updated = raw.get("updated_at") or ""
             if updated and (latest_watermark is None or updated > latest_watermark):
