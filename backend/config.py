@@ -142,7 +142,7 @@ class Settings:
     JIRA_BASE_URL = os.getenv("JIRA_BASE_URL", "").rstrip("/")
     JIRA_EMAIL = os.getenv("JIRA_EMAIL", "").strip()
     JIRA_API_TOKEN = os.getenv("JIRA_API_TOKEN", "").strip()
-    JIRA_PROJECT_KEY = os.getenv("JIRA_PROJECT_KEY", "SCRUM").strip()
+    JIRA_PROJECT_KEY = os.getenv("JIRA_PROJECT_KEY", "INC").strip()
     JIRA_POLL_SECONDS = _int("JIRA_POLL_SECONDS", 30)
     # Per-site custom field ids (customfield_10xxx) — cannot be guessed from
     # documentation. Empty means "don't write that field" rather than a wrong
