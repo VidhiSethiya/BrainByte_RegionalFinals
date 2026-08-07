@@ -66,8 +66,8 @@ export default function Documents() {
       <Flex vertical gap={4}>
         <h1 className="page-title">Knowledge Base</h1>
         <p className="page-subtitle">
-          The runbooks and reference material every decision cites. PII is masked before anything
-          is embedded.
+          Upload runbooks, SLA docs, and service catalogues here. Triage and the assistant
+          search this library to ground every decision — nothing is answered from memory alone.
         </p>
       </Flex>
 

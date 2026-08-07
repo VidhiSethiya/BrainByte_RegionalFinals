@@ -1,0 +1,49 @@
+Production incident management and reliability tracking
+=======================================================
+
+Team: ops
+Use for: Meta or tracking tickets about production incidents, service availability,
+root-cause investigation, mitigation, and reliability improvements (not a single
+failing component alert).
+Jira Priority: often Low when the ticket is a tracker / programme of work rather
+than an active outage.
+
+## Symptom
+- Ticket title or body refers to "Production Incident Management", "reliability",
+  "service availability", "RCA", "mitigation", or "reliability improvements"
+- Scope is the overall application or platform (e.g. BrainBytes), not one RDS/API alarm
+- Usually no concrete error code, host, or metric threshold in the description
+- May be used as an epic-style container for ongoing reliability work
+
+## Diagnosis
+1. Decide if this is an **active outage** or a **tracking / process** ticket.
+2. If active outage language appears (down, paging, customer impact now), stop and
+   treat under the matching component runbook (RDS, EKS, proxy, etc.) instead.
+3. If it is a tracker: confirm owner (Ops), expected cadence (standup, weekly RCA review),
+   and linked child incidents.
+4. Check whether duplicate trackers already exist for the same programme of work.
+
+## Fix
+TicketSphere recommends only — Ops executes process work.
+
+1. Keep Priority **Low** when there is no live customer-impacting failure described.
+2. Route to **ops** as the reliability / incident-management owner.
+3. Do not invent a component fix or SLA breach from a vague tracker description.
+4. Suggested first step for the engineer:
+   - Confirm whether any linked High/Highest incidents are still open
+   - If none: convert or label as reliability backlog / tracker and set a review date
+   - If yes: work the linked incident runbooks first; leave this ticket as the parent tracker
+5. Add a short comment listing linked incidents and the next reliability checkpoint.
+
+## Escalate
+- Raise Priority and page on-call only when this ticket (or a child) describes an
+  active production outage with no workaround.
+- Otherwise leave as Low / Ops and hold for human review if confidence is low or
+  the description is too thin to classify as a concrete fault.
+
+## Notes for TicketSphere
+- Prefer **ops**, Priority **Low**, low confidence when the body is a generic
+  incident-management brief with no failing service named.
+- Do not cite unrelated component runbooks as "evidence" for this ticket type.
+- Suggested first step: clarify active vs tracker; if tracker, schedule reliability
+  review and link child incidents — do not auto-remediate.

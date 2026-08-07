@@ -55,13 +55,26 @@ def kb_search(query: str, top_k: int = 6, user: dict | None = None) -> list[dict
     return [c.model_dump() for c in chunks]
 
 
-def similar_tickets(query: str, top_k: int = 5, user: dict | None = None) -> list[dict]:
+def similar_tickets(
+    query: str,
+    top_k: int = 5,
+    user: dict | None = None,
+    exclude_external_id: str | None = None,
+) -> list[dict]:
     chunks = retrieve(
         query,
         user=user or {},
         filters={"doc_type": "ticket_history", "resolved": "true"},
-        top_k=top_k,
+        top_k=top_k + (4 if exclude_external_id else 0),
     )
+    exclude = (exclude_external_id or "").strip()
+    if exclude:
+        chunks = [
+            c
+            for c in chunks
+            if (c.metadata.get("external_id") or "") != exclude
+            and exclude not in (c.filename or "")
+        ][:top_k]
     return [c.model_dump() for c in chunks]
 
 

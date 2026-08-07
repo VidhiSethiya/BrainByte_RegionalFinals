@@ -39,12 +39,13 @@ import {
   Tooltip,
   Typography,
 } from "antd";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 import Markdown from "react-markdown";
 
 import {
   api,
   ApiError,
+  type RetrievedChunk,
   type Severity,
   type Team,
   type TicketDetail,
@@ -78,11 +79,42 @@ function formatMinutes(minutes: number | undefined | null) {
 }
 
 /**
- * Renders `[C1]` inside markdown text as a clickable chip that scrolls to the
- * matching evidence item. Applied to the leaf renderers rather than pre-parsing the
- * string, so markdown emphasis and lists keep working.
+ * Turn stored rationale into a short bullet list for the drawer.
+ * Handles both the new "- **Type:** …" form and older multi-paragraph text.
  */
-function withCitations(children: React.ReactNode, onCite: (label: string) => void): React.ReactNode {
+function simplifyRationale(raw: string): string {
+  const text = (raw || "").trim();
+  if (!text) return "";
+
+  // Already short bullet form from the composer.
+  if (/^-\s+\*\*/m.test(text) && text.split("\n").filter(Boolean).length <= 6) {
+    return text;
+  }
+
+  const bullets: string[] = [];
+  const sections = text.split(/\n\s*\n|\n(?=\*\*)/);
+  for (const block of sections) {
+    const cleaned = block
+      .replace(/^\*\*(.+?)\*\*\s*/gm, "")
+      .replace(/\n+/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (!cleaned) continue;
+    let line = cleaned;
+    if (line.length > 160) {
+      const cut = line.indexOf(". ");
+      if (cut >= 40 && cut <= 160) line = line.slice(0, cut + 1);
+      else line = `${line.slice(0, 157)}…`;
+    }
+    bullets.push(`- ${line}`);
+    if (bullets.length >= 4) break;
+  }
+
+  return bullets.length ? bullets.join("\n") : `- ${text.slice(0, 200)}${text.length > 200 ? "…" : ""}`;
+}
+
+/** Renders `[C1]` as a static chip inside markdown leaves. */
+function withCitations(children: React.ReactNode): React.ReactNode {
   const mapNode = (node: React.ReactNode, key: number): React.ReactNode => {
     if (typeof node !== "string") return node;
     const parts = node.split(/(\[C\d+\])/g);
@@ -91,15 +123,9 @@ function withCitations(children: React.ReactNode, onCite: (label: string) => voi
       const match = part.match(/^\[(C\d+)\]$/);
       if (!match) return part;
       return (
-        <button
-          key={`${key}-${index}`}
-          type="button"
-          className="citation-chip"
-          onClick={() => onCite(match[1])}
-          aria-label={`Jump to evidence ${match[1]}`}
-        >
+        <span key={`${key}-${index}`} className="citation-chip" aria-hidden="true">
           {match[1]}
-        </button>
+        </span>
       );
     });
   };
@@ -146,10 +172,8 @@ export function DecisionBody({
   busy = false,
 }: DecisionBodyProps) {
   const { message: toast } = App.useApp();
-  const [highlighted, setHighlighted] = useState<string | null>(null);
   const [overrideField, setOverrideField] = useState<OverrideInput["field"] | null>(null);
   const [form] = Form.useForm<OverrideInput>();
-  const evidenceRefs = useRef<Record<string, HTMLDivElement | null>>({});
 
   // Retrieval mode is a system-wide setting, not a per-ticket field; provenance
   // reads it from the same cached /health query the header uses.
@@ -159,11 +183,21 @@ export function DecisionBody({
     staleTime: 5 * 60_000,
   });
 
-  useEffect(() => {
-    if (!highlighted) return;
-    const timer = window.setTimeout(() => setHighlighted(null), 2400);
-    return () => window.clearTimeout(timer);
-  }, [highlighted]);
+  const ticketForSearch = detail?.ticket;
+  const similarQuery = useQuery({
+    queryKey: ["similar-tickets", ticketForSearch?.id, ticketForSearch?.title],
+    queryFn: () =>
+      api
+        .search(ticketForSearch!.title || ticketForSearch!.external_id, {
+          top_k: 6,
+          exclude_ticket_id: ticketForSearch!.id,
+          exclude_external_id: ticketForSearch!.external_id || undefined,
+          filters: { doc_type: "ticket_history" },
+        })
+        .then((r) => r.data),
+    enabled: !!ticketForSearch?.id && !!ticketForSearch?.title,
+    staleTime: 60_000,
+  });
 
   if (loading) return <Skeleton active paragraph={{ rows: 8 }} />;
 
@@ -192,10 +226,12 @@ export function DecisionBody({
   const { ticket, decision, guardrails_fired: guardrails } = detail;
   const blocked = !decision;
 
-  function jumpToCitation(label: string) {
-    setHighlighted(label);
-    evidenceRefs.current[label]?.scrollIntoView({ behavior: "smooth", block: "center" });
-  }
+  const externalKey = (ticket.external_id || "").trim();
+  const otherEvidence = (decision?.evidence ?? []).filter((citation) => {
+    if (!externalKey) return true;
+    return !citation.filename.includes(externalKey) && citation.doc_id !== ticket.id;
+  });
+  const similarTickets: RetrievedChunk[] = similarQuery.data ?? [];
 
   function submitOverride(values: OverrideInput) {
     onOverride?.({ ...values, field: overrideField! });
@@ -215,6 +251,17 @@ export function DecisionBody({
     { label: "Guardrails", value: guardrails.length ? guardrails.map((g) => g.type).join(", ") : "none fired" },
   ];
 
+  // Ticket row wins after override; decision_json keeps the AI recommendation.
+  const displaySeverity = (ticket.severity || decision?.severity || "") as Severity | "";
+  const displayTeam = (ticket.assigned_team || decision?.assigned_team || null) as Team | null;
+  const aiSeverity = (decision?.severity || "") as Severity | "";
+  const aiTeam = (decision?.assigned_team || null) as Team | null;
+  const priorityOverridden =
+    !!ticket.overridden_by && !!aiSeverity && !!displaySeverity && aiSeverity !== displaySeverity;
+  const teamOverridden =
+    !!ticket.overridden_by && !!aiTeam && !!displayTeam && aiTeam !== displayTeam;
+  const showOverrideBanner = !!ticket.overridden_by && (priorityOverridden || teamOverridden || !!ticket.override_reason);
+
   return (
     <Flex vertical gap={24}>
       <Flex vertical gap={8}>
@@ -230,18 +277,51 @@ export function DecisionBody({
           {ticket.title}
         </Typography.Title>
         <Space size={8} wrap>
-          {/* No decision means no assessed severity — showing one would invent a fact. */}
-          {decision ? (
-            <SeverityTag severity={(decision.severity || ticket.severity) as Severity} />
+          {displaySeverity ? (
+            <SeverityTag severity={displaySeverity as Severity} />
           ) : (
             <Tag>Priority not assessed</Tag>
           )}
           <StatusTag status={ticket.status} />
-          <TeamTag team={(decision?.assigned_team || ticket.assigned_team) as Team | null} />
+          <TeamTag team={displayTeam} />
           <Tag style={{ marginInlineEnd: 0 }}>{ticket.source}</Tag>
           {ticket.overridden_by && <Tag color="warning">Overridden by {ticket.overridden_by}</Tag>}
         </Space>
       </Flex>
+
+      {showOverrideBanner && (
+        <Alert
+          type="warning"
+          showIcon
+          message="Human override applied"
+          description={
+            [
+              priorityOverridden ? `Priority: AI suggested ${aiSeverity} → ${displaySeverity}` : null,
+              teamOverridden
+                ? `Team: AI suggested ${TEAM_LABEL[aiTeam!] ?? aiTeam} → ${TEAM_LABEL[displayTeam!] ?? displayTeam}`
+                : null,
+              !priorityOverridden && !teamOverridden && displaySeverity
+                ? `Current priority: ${displaySeverity}${displayTeam ? ` · team ${TEAM_LABEL[displayTeam] ?? displayTeam}` : ""}`
+                : null,
+              ticket.override_reason ? `Reason: ${ticket.override_reason}` : null,
+            ]
+              .filter(Boolean)
+              .join(". ")
+          }
+        />
+      )}
+
+      {ticket.status === "failed" && (
+        <Alert
+          type="error"
+          showIcon
+          message="Last sync / triage failed"
+          description={
+            ticket.last_error?.trim() ||
+            "The model did not finish this run. Priority and team below may be from an earlier attempt — re-run Sync Now when the LLM is healthy."
+          }
+        />
+      )}
 
       {!!guardrails.length && (
         <div className="blocked-panel">
@@ -272,8 +352,9 @@ export function DecisionBody({
           {/* The one line a reader must get, before any detail. */}
           <div style={{ background: "var(--bg-surface-alt)", borderRadius: "var(--radius-md)", padding: 16 }}>
             <Typography.Text style={{ fontSize: 16, lineHeight: "24px" }}>
-              Routed to <strong>{TEAM_LABEL[decision.assigned_team]}</strong> as Priority{" "}
-              <strong>{decision.severity}</strong>, score{" "}
+              Routed to{" "}
+              <strong>{TEAM_LABEL[displayTeam || decision.assigned_team] ?? displayTeam}</strong> as
+              Priority <strong>{displaySeverity || decision.severity}</strong>, score{" "}
               <strong className="tabular">{decision.priority_score}</strong>, SLA{" "}
               <strong>{formatMinutes(decision.sla_target_mins)}</strong>, confidence{" "}
               <strong className="tabular">{(decision.confidence * 100).toFixed(0)}%</strong>.
@@ -291,32 +372,45 @@ export function DecisionBody({
           </div>
 
           <Flex vertical gap={8}>
-            <span className="label">Rationale</span>
-            <div className="markdown-body">
-              <Markdown
-                components={{
-                  p: ({ children }) => <p>{withCitations(children, jumpToCitation)}</p>,
-                  li: ({ children }) => <li>{withCitations(children, jumpToCitation)}</li>,
-                }}
-              >
-                {decision.rationale}
-              </Markdown>
-            </div>
+            <span className="label">Why we decided this</span>
+            {simplifyRationale(decision.rationale) ? (
+              <div className="markdown-body rationale-body">
+                <Markdown
+                  components={{
+                    p: ({ children }) => <p>{withCitations(children)}</p>,
+                    li: ({ children }) => <li>{withCitations(children)}</li>,
+                    strong: ({ children }) => <strong>{children}</strong>,
+                  }}
+                >
+                  {simplifyRationale(decision.rationale)}
+                </Markdown>
+              </div>
+            ) : (
+              <Typography.Text type="secondary" style={{ fontSize: 13 }}>
+                {ticket.status === "failed"
+                  ? "No explanation on the last successful run either — re-triage after the model is available."
+                  : "This is a thin tracker-style ticket (no active outage named), so confidence stays low until a human confirms."}
+              </Typography.Text>
+            )}
           </Flex>
 
           <Flex vertical gap={8}>
-            <span className="label">Evidence</span>
-            {decision.evidence.length === 0 ? (
-              <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No sources were cited." />
+            <span className="label">Sources used</span>
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              Runbooks and other tickets cited for this decision (this ticket excluded).
+            </Typography.Text>
+            {otherEvidence.length === 0 ? (
+              <Empty
+                image={Empty.PRESENTED_IMAGE_SIMPLE}
+                description={
+                  ticket.status === "failed"
+                    ? "No sources on this run — sync failed before retrieval completed."
+                    : "No matching runbook cited. Upload an Ops reliability-tracker guide if you want this ticket type grounded."
+                }
+              />
             ) : (
-              decision.evidence.map((citation) => (
-                <div
-                  key={citation.label}
-                  ref={(element) => {
-                    evidenceRefs.current[citation.label] = element;
-                  }}
-                  className={`evidence-item ${highlighted === citation.label ? "is-highlighted" : ""}`}
-                >
+              otherEvidence.map((citation) => (
+                <div key={citation.label} className="evidence-item">
                   <Flex align="baseline" gap={8} wrap>
                     <span className="citation-chip" aria-hidden="true">
                       {citation.label}
@@ -342,13 +436,51 @@ export function DecisionBody({
           </Flex>
 
           <Flex vertical gap={8}>
-            <span className="label">Suggested first action — recommendation only</span>
+            <span className="label">Similar tickets</span>
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              Other indexed incidents like this one — not the ticket you have open.
+            </Typography.Text>
+            {similarQuery.isPending ? (
+              <Skeleton active paragraph={{ rows: 3 }} />
+            ) : similarTickets.length === 0 ? (
+              <Empty
+                image={Empty.PRESENTED_IMAGE_SIMPLE}
+                description="No other similar tickets in the knowledge base yet. Sync more incidents or re-seed runbooks."
+              />
+            ) : (
+              similarTickets.map((chunk) => (
+                <div key={chunk.id} className="evidence-item">
+                  <Flex justify="space-between" gap={8} wrap>
+                    <Typography.Text strong style={{ fontSize: 13 }}>
+                      {(chunk.metadata?.external_id as string) || chunk.filename}
+                    </Typography.Text>
+                    <span className="tabular" style={{ fontSize: 12, color: "var(--text-secondary)" }}>
+                      {(chunk.score * 100).toFixed(0)}% match
+                    </span>
+                  </Flex>
+                  <Typography.Paragraph
+                    type="secondary"
+                    style={{ fontSize: 13, marginBottom: 0, marginTop: 8 }}
+                  >
+                    {chunk.text.slice(0, 280)}
+                    {chunk.text.length > 280 ? "…" : ""}
+                  </Typography.Paragraph>
+                </div>
+              ))
+            )}
+          </Flex>
+
+          <Flex vertical gap={8}>
+            <span className="label">Suggested first step</span>
             <div className="recommendation">
               <Typography.Paragraph style={{ marginBottom: 8 }}>
-                {decision.suggested_first_action}
+                {decision.suggested_first_action?.trim() ||
+                  ((decision.subcategory || decision.category || "").toLowerCase().includes("incident")
+                    ? "Treat as a reliability tracker: confirm no linked active outage, keep with Ops, set a review date."
+                    : "No runbook step recorded — use engineer judgement.")}
               </Typography.Paragraph>
               <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                TicketSphere does not execute remediation. A human runs this step.
+                Recommendation only — TicketSphere does not change production. A human runs this.
               </Typography.Text>
             </div>
           </Flex>
@@ -518,9 +650,10 @@ export default function DecisionDrawer({
     onSuccess: ({ data }) => {
       const team = (data.assigned_team || "ops") as Team;
       toast.success(
-        `Override saved — ${data.severity || "—"} · ${TEAM_LABEL[team] ?? team}`
+        `Override routed — ${data.severity || "—"} · ${TEAM_LABEL[team] ?? team} (written to Jira)`
       );
       invalidate();
+      onClose();
     },
     onError: (error: Error) => toast.error(error.message),
   });

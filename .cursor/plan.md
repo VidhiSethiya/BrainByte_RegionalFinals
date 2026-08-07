@@ -269,4 +269,18 @@ Jira issue created/updated
 1. ~~Phase J~~ DONE  
 2. ~~Phase FE-JIRA~~ DONE  
 3. ~~Phase PRIORITY~~ DONE  
-4. Orchestrator: next blueprint phase (outside JIRA-7)  
+4. Orchestrator: next blueprint phase (outside JIRA-7)
+
+---
+
+## Control Tower / shell UX (2026-08-07)
+
+- [x] **TASK-UX-1**: Header profile icon only; drop model/retrieval badges
+  - **Files**: `frontend/src/layouts/AppLayout.tsx`
+  - **Acceptance Criteria**: Header shows avatar; click reveals username + role; no hosted/hybrid tags
+  - **Status**: DONE
+
+- [x] **TASK-UX-3**: Keep History, drop Audit Trail nav/page
+  - **Files**: `AppLayout.tsx`, `App.tsx`, delete `pages/Audit.tsx`
+  - **Acceptance Criteria**: No Audit Trail in sider; `/audit` redirects to `/history`; backend audit APIs remain
+  - **Status**: DONE

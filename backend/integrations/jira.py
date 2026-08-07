@@ -196,21 +196,32 @@ class JiraSource(TicketSource):
     # JIRA_FIELD_* stay honoured *additionally* if custom fields exist later.
 
     _TEAM_TO_LABEL = {"aws": "AWS", "azure": "AZR", "gcp": "GCP", "ops": "OPS"}
+    _TEAM_LABELS = frozenset(_TEAM_TO_LABEL.values())
 
     def update(self, external_id: str, fields: dict[str, Any]) -> None:
         set_fields: dict[str, Any] = {}
-        label_adds: list[str] = []
+        label_ops: list[dict[str, str]] = []
 
         severity = fields.get("severity")
         if severity:
             pname = priority_group(str(severity))
             if pname:
+                # Native Jira Priority field only — never stamp ticketsphere-priority-* labels.
                 set_fields["priority"] = {"name": pname}
-                label_adds.append(f"ticketsphere-priority-{pname}")
+
+        # Always strip legacy priority labels if present (from older write-backs).
+        for pname in ("Highest", "High", "Medium", "Low", "Lowest"):
+            label_ops.append({"remove": f"ticketsphere-priority-{pname}"})
 
         team = fields.get("assigned_team")
         if team:
-            label_adds.append(self._TEAM_TO_LABEL.get(team, team.upper()))
+            team_label = self._TEAM_TO_LABEL.get(str(team).lower())
+            if team_label:
+                # Keep exactly one cloud/team label: drop the other three, then add this one.
+                for other in self._TEAM_LABELS:
+                    if other != team_label:
+                        label_ops.append({"remove": other})
+                label_ops.append({"add": team_label})
 
         # Optional custom fields, only written if a team has actually created them.
         if "severity" in fields and settings.JIRA_FIELD_SEVERITY:
@@ -222,7 +233,7 @@ class JiraSource(TicketSource):
         if "confidence" in fields and settings.JIRA_FIELD_AI_CONFIDENCE:
             set_fields[settings.JIRA_FIELD_AI_CONFIDENCE] = fields["confidence"]
 
-        if not set_fields and not label_adds:
+        if not set_fields and not label_ops:
             log.warning("Jira update(%s, %s) — nothing mappable, nothing written",
                         external_id, list(fields.keys()))
             return
@@ -230,8 +241,8 @@ class JiraSource(TicketSource):
         body: dict[str, Any] = {}
         if set_fields:
             body["fields"] = set_fields
-        if label_adds:
-            body["update"] = {"labels": [{"add": label} for label in label_adds]}
+        if label_ops:
+            body["update"] = {"labels": label_ops}
 
         resp = self._request("PUT", f"/rest/api/3/issue/{external_id}", json=body)
         if resp.status_code not in (200, 204):

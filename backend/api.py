@@ -508,9 +508,25 @@ def search():
         query,
         user=g.user,
         filters=body.get("filters") or {},
-        top_k=int(body.get("top_k") or settings.FINAL_TOP_K),
+        top_k=int(body.get("top_k") or settings.FINAL_TOP_K) + (
+            6 if body.get("exclude_external_id") or body.get("exclude_ticket_id") else 0
+        ),
         decompose=bool(body.get("decompose")),
     )
+    exclude_ext = str(body.get("exclude_external_id") or "").strip()
+    exclude_id = str(body.get("exclude_ticket_id") or "").strip()
+    if exclude_ext or exclude_id:
+        filtered = []
+        for c in chunks:
+            meta = c.metadata or {}
+            if exclude_ext and (
+                meta.get("external_id") == exclude_ext or exclude_ext in (c.filename or "")
+            ):
+                continue
+            if exclude_id and meta.get("ticket_id") == exclude_id:
+                continue
+            filtered.append(c)
+        chunks = filtered[: int(body.get("top_k") or settings.FINAL_TOP_K)]
     audit.record("search.performed", user_id=g.user["id"], results=len(chunks))
     return ok(
         [c.model_dump() for c in chunks],
@@ -627,7 +643,12 @@ def override_ticket(ticket_id: str):
     """Manager or engineer-on-their-own-team can override a field. Reason is
     mandatory (OverrideRequest enforces min_length=3) — every override is both
     audited and queued as feedback, so it feeds the eval set the same way a
-    thumbs-down on a chat answer does."""
+    thumbs-down on a chat answer does.
+
+    Override *is* the human decision: it writes Priority/team to Jira immediately,
+    clears the approval gate, and removes the ticket from the approval queue.
+    A separate Approve click is not required.
+    """
     payload, error = validate_request(request.get_json(silent=True), OverrideRequest)
     if error:
         return fail("validation_error", error, 422)
@@ -639,10 +660,10 @@ def override_ticket(ticket_id: str):
         if _scope_ticket_query(s.query(Ticket).filter_by(id=ticket_id), g.user).first() is None:
             return fail("not_found", "Ticket not found", 404)
 
+        from integrations.jira import normalize_priority
+
         new_value = payload.new_value
         if payload.field == "severity":
-            from integrations.jira import normalize_priority
-
             new_value = normalize_priority(str(payload.new_value))
             if new_value not in ("Highest", "High", "Medium", "Low"):
                 return fail(
@@ -652,8 +673,32 @@ def override_ticket(ticket_id: str):
                 )
 
         setattr(row, payload.field, new_value)
-        row.overridden_by = g.user["id"]
+        row.overridden_by = g.user.get("username") or g.user["id"]
         row.override_reason = payload.reason
+
+        severity = normalize_priority((row.severity or "").strip())
+        assigned_team = (row.assigned_team or "").strip()
+        if not severity or not assigned_team:
+            return fail(
+                "not_ready",
+                "Override needs both priority and team on the ticket. "
+                "Set the missing field first, then override again.",
+                409,
+            )
+
+        # Human override closes the gate — leave the approval queue now.
+        row.severity = severity
+        row.needs_human = False
+        row.status = "approved"
+        external_id = (row.external_id or "").strip()
+        fields = {
+            "severity": severity,
+            "priority_score": row.priority_score,
+            "assigned_team": assigned_team,
+            "confidence": row.confidence,
+        }
+        confidence = row.confidence or 0.0
+        who = g.user.get("username") or g.user["id"]
         s.commit()
         s.refresh(row)
 
@@ -665,8 +710,6 @@ def override_ticket(ticket_id: str):
             new_value=new_value,
             reason=payload.reason,
         )
-        # Feeds the eval set the same way a chat thumbs-down does — a message_id
-        # is required by the Feedback table, so the ticket id doubles as one here.
         s.add(
             Feedback(
                 message_id=ticket_id,
@@ -676,7 +719,54 @@ def override_ticket(ticket_id: str):
             )
         )
         s.commit()
-        return ok(row.to_dict())
+
+    # Write-back through the same gate as Approve so Jira Priority + labels update.
+    try:
+        result = tools.call(
+            "ticket_update",
+            ticket_id,
+            fields,
+            user=g.user,
+            ticket_status="approved",
+            confidence=confidence,
+            severity=severity,
+        )
+    except ToolDenied as exc:
+        return fail("tool_denied", str(exc), 403)
+
+    if external_id:
+        try:
+            source = tools.get_ticket_source()
+            source.add_comment(
+                external_id,
+                f"TicketSphere override by {who}: {payload.field} → {new_value}. "
+                f"Reason: {payload.reason}. "
+                f"Routed as {severity} · {assigned_team} · confidence {confidence:.0%}.",
+            )
+            source.transition(external_id, "routed")
+        except Exception as exc:  # noqa: BLE001
+            log.warning(
+                "post-override comment/transition failed for %s (%s): %s",
+                ticket_id,
+                external_id,
+                exc,
+            )
+
+    with SessionLocal() as s:
+        row = s.get(Ticket, ticket_id)
+        row.status = "routed"
+        row.needs_human = False
+        s.commit()
+        s.refresh(row)
+        payload_out = row.to_dict()
+
+    audit.record(
+        "ticket.override_routed",
+        user_id=g.user["id"],
+        resource=ticket_id,
+        **(result if isinstance(result, dict) else {}),
+    )
+    return ok(payload_out)
 
 
 @api_bp.post("/tickets/<ticket_id>/approve")

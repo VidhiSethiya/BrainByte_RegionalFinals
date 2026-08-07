@@ -3,7 +3,7 @@ import { Skeleton } from "antd";
 import { Suspense, lazy } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
 
-import { api, auth } from "./api/client";
+import { api, auth, meQueryKey } from "./api/client";
 import AppLayout, { isManagerRole } from "./layouts/AppLayout";
 import History from "./pages/History";
 import Login from "./pages/Login";
@@ -15,7 +15,6 @@ import Triage from "./pages/Triage";
  * everything that pulls in Recharts or the markdown renderer — is split out so
  * an engineer who never opens Control never downloads a charting library.
  */
-const Audit = lazy(() => import("./pages/Audit"));
 const Chat = lazy(() => import("./pages/Chat"));
 const Control = lazy(() => import("./pages/Control"));
 const Dashboard = lazy(() => import("./pages/Dashboard"));
@@ -28,9 +27,10 @@ function Protected({ children }: { children: React.ReactNode }) {
 
 function useRole() {
   const { data: me, isPending } = useQuery({
-    queryKey: ["me"],
+    queryKey: meQueryKey(),
     queryFn: () => api.me().then((r) => r.data),
     staleTime: 5 * 60_000,
+    enabled: !!auth.get(),
   });
   return { role: me?.role, isPending };
 }
@@ -120,16 +120,9 @@ export default function App() {
             </ManagerOnly>
           }
         />
-        <Route
-          path="audit"
-          element={
-            <ManagerOnly>
-              <Suspense fallback={<Skeleton active paragraph={{ rows: 6 }} />}>
-                <Audit />
-              </Suspense>
-            </ManagerOnly>
-          }
-        />
+        {/* Audit Trail UI dropped — History drawer timeline is the ticket-centric trail
+            (audit_log still written server-side; /api/audit remains for verify demos). */}
+        <Route path="audit" element={<Navigate to="/history" replace />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

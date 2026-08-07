@@ -27,7 +27,7 @@ import {
 } from "antd";
 import { useMemo, useState } from "react";
 
-import { api, type RetrievedChunk, type TicketListParams } from "../api/client";
+import { api, meQueryKey, type RetrievedChunk, type TicketListParams } from "../api/client";
 import DecisionDrawer from "../components/DecisionDrawer";
 import {
   CATEGORY_OPTIONS,
@@ -70,10 +70,14 @@ export default function History() {
   const selectTicket = useUiStore((state) => state.selectTicket);
   const closeDrawer = useUiStore((state) => state.closeDrawer);
 
-  const [similarFor, setSimilarFor] = useState<{ id: string; title: string } | null>(null);
+  const [similarFor, setSimilarFor] = useState<{
+    id: string;
+    title: string;
+    external_id: string;
+  } | null>(null);
 
   const { data: me } = useQuery({
-    queryKey: ["me"],
+    queryKey: meQueryKey(),
     queryFn: () => api.me().then((r) => r.data),
     staleTime: 5 * 60_000,
   });
@@ -88,8 +92,16 @@ export default function History() {
   });
 
   const similar = useQuery({
-    queryKey: ["search", similarFor?.title],
-    queryFn: () => api.search(similarFor!.title, { top_k: 6 }).then((r) => r.data),
+    queryKey: ["search", similarFor?.id, similarFor?.title],
+    queryFn: () =>
+      api
+        .search(similarFor!.title, {
+          top_k: 8,
+          exclude_ticket_id: similarFor!.id,
+          exclude_external_id: similarFor!.external_id || undefined,
+          filters: { doc_type: "ticket_history" },
+        })
+        .then((r) => r.data),
     enabled: !!similarFor,
   });
 
@@ -99,7 +111,8 @@ export default function History() {
         <Flex vertical gap={4}>
           <h1 className="page-title">History</h1>
           <p className="page-subtitle">
-            Tickets with decisions, overrides and outcomes. Search by SCRUM key or title.
+            Past tickets and the full decision story — AI recommendation, overrides, approvals,
+            and sync. This is the operational audit trail for triage.
           </p>
         </Flex>
         <Space>
@@ -109,7 +122,7 @@ export default function History() {
               icon={<SearchOutlined />}
               onClick={() => {
                 const row = history.data?.data.find((ticket) => ticket.id === selectedTicketId);
-                if (row) setSimilarFor({ id: row.id, title: row.title });
+                if (row) setSimilarFor({ id: row.id, title: row.title, external_id: row.external_id });
               }}
             >
               Find similar
@@ -227,7 +240,7 @@ export default function History() {
         open={!!similarFor}
         onClose={() => setSimilarFor(null)}
         width={480}
-        title="Similar tickets and runbook passages"
+        title="Similar tickets (excluding this one)"
         styles={{ wrapper: { boxShadow: "var(--shadow-float)" } }}
       >
         {similar.isPending && <Skeleton active paragraph={{ rows: 6 }} />}
@@ -249,7 +262,10 @@ export default function History() {
             dataSource={similar.data}
             locale={{
               emptyText: (
-                <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Nothing close enough to show." />
+                <Empty
+                  image={Empty.PRESENTED_IMAGE_SIMPLE}
+                  description="No other similar tickets in the knowledge base yet."
+                />
               ),
             }}
             renderItem={(chunk: RetrievedChunk) => (
@@ -257,7 +273,7 @@ export default function History() {
                 <Flex vertical gap={4} style={{ width: "100%" }}>
                   <Flex justify="space-between" gap={8}>
                     <Typography.Text strong style={{ fontSize: 13 }}>
-                      {chunk.filename}
+                      {(chunk.metadata?.external_id as string) || chunk.filename}
                       {chunk.page !== null ? ` · p.${chunk.page}` : ""}
                     </Typography.Text>
                     <span className="tabular" style={{ fontSize: 13, color: "var(--text-secondary)" }}>

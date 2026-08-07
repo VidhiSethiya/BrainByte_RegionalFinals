@@ -145,31 +145,49 @@ h1 {
   border-radius: var(--radius-sm);
   padding: 0 6px;
   margin: 0 2px;
-  cursor: pointer;
   background: transparent;
   line-height: 18px;
-}
-
-.citation-chip:hover,
-.citation-chip:focus-visible {
-  background: var(--tint-info);
 }
 
 .evidence-item {
   border: 1px solid var(--border-color);
   border-radius: var(--radius-sm);
   padding: 12px;
-  transition: background 160ms ease, border-color 160ms ease;
-}
-
-.evidence-item.is-highlighted {
-  background: var(--tint-info);
-  border-color: var(--accent-secondary);
 }
 
 /* Markdown rendered inside cards and drawers. */
 .markdown-body p {
   margin: 0 0 8px;
+}
+
+.rationale-body {
+  background: var(--bg-surface-alt);
+  border-radius: var(--radius-md);
+  padding: 12px 14px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-primary);
+}
+
+.rationale-body ul {
+  margin: 0;
+  padding-inline-start: 1.15rem;
+}
+
+.rationale-body li {
+  margin-bottom: 6px;
+}
+
+.rationale-body li:last-child {
+  margin-bottom: 0;
+}
+
+.rationale-body p:last-child {
+  margin-bottom: 0;
+}
+
+.rationale-body strong {
+  font-weight: 600;
 }
 
 .markdown-body p:last-child {
@@ -319,6 +337,67 @@ h1 {
 .stat-tile {
   position: relative;
   overflow: hidden;
+  height: 100%;
+}
+
+.stat-tile.is-compact .ant-card-body {
+  height: 100%;
+}
+
+.stat-tile.is-compact .label {
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Equal-width KPI strip — avoids Ant Col uneven wrap across 13 tiles. */
+.control-kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
+  gap: 10px;
+  align-items: stretch;
+}
+
+@media (min-width: 1200px) {
+  .control-kpi-grid {
+    grid-template-columns: repeat(7, minmax(0, 1fr));
+  }
+
+  .control-kpi-grid--slim {
+    grid-template-columns: repeat(3, minmax(140px, 220px));
+  }
+}
+
+.header-profile-btn {
+  height: auto !important;
+  padding: 4px !important;
+  display: inline-flex;
+  align-items: center;
+}
+
+/* Soft pulse so the always-on assistant is discoverable without shouting. */
+@keyframes chatbot-fab-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(2, 114, 137, 0.45);
+    opacity: 1;
+  }
+  50% {
+    box-shadow: 0 0 0 10px rgba(2, 114, 137, 0);
+    opacity: 0.88;
+  }
+}
+
+.chatbot-fab-blink.ant-float-btn {
+  animation: chatbot-fab-pulse 1.6s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chatbot-fab-blink.ant-float-btn {
+    animation: none;
+  }
 }
 
 .stat-tile::before {

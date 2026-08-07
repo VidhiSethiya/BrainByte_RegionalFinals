@@ -8,6 +8,14 @@
 /** teal, sky, amber, navy — in this order, always. */
 export const SERIES = ["#027289", "#4FB3C4", "#DE8433", "#14304A"];
 
+/** Priority pie slices — Highest → Low. Matches SeverityTag intent, not Ant tokens. */
+export const PRIORITY_COLORS: Record<string, string> = {
+  Highest: "#C0392B",
+  High: "#DE8433",
+  Medium: "#4FB3C4",
+  Low: "#14304A",
+};
+
 export const AXIS = "#14304A";
 export const GRID = "#E1EBEF";
 export const SURFACE = "#FFFFFF";

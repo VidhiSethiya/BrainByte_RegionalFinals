@@ -275,7 +275,8 @@ export default function Triage() {
       <Flex vertical gap={4}>
         <h1 className="page-title">Triage</h1>
         <p className="page-subtitle">
-          Run one ticket through the pipeline, or sync Jira from Control Tower for live SCRUM issues.
+          Paste or describe one ticket and watch the AI classify, set Priority, and pick a team —
+          step by step. For live Jira SCRUM issues, use Control Tower → Sync Now instead.
         </p>
       </Flex>
 

@@ -340,7 +340,7 @@ Return JSON only, matching this schema exactly (TriageVerdict in rag/schemas.py)
   "subcategory": "<a more specific label you choose, e.g. connection-pool-exhaustion>",
   "service": "<the affected service/application name>",
   "confidence": 0.0-1.0,
-  "rationale": "<one sentence; cite [C#] where you used retrieved evidence>"
+  "rationale": "<one plain-English sentence for an on-call engineer; cite [C#] when you used retrieved evidence; avoid jargon>"
 }}"""
 )
 
@@ -383,7 +383,7 @@ Return JSON only, matching this schema exactly (SeverityVerdict in rag/schemas.p
   "severity": "Highest|High|Medium|Low",
   "priority_score": 0-100,
   "confidence": 0.0-1.0,
-  "rationale": "<one or two sentences; cite [C#] for the SLA figure and any precedent used>"
+  "rationale": "<one or two plain-English sentences for an on-call engineer; cite [C#] for the SLA figure and any precedent used; avoid jargon>"
 }}"""
 )
 
@@ -403,7 +403,7 @@ CONTEXT (service catalogue, team capacity):
 Teams: ops, azure, aws, gcp.
 
 Return JSON only, matching this schema exactly (RoutingVerdict in rag/schemas.py):
-{{"assigned_team": "ops|azure|aws|gcp", "confidence": 0.0-1.0, "rationale": "<one sentence; cite [C#] for the catalogue entry used>"}}"""
+{{"assigned_team": "ops|azure|aws|gcp", "confidence": 0.0-1.0, "rationale": "<one plain-English sentence for an on-call engineer; cite [C#] for the catalogue entry used; avoid jargon>"}}"""
 
 # --- reflect -----------------------------------------------------------------
 # Self-critique against the cited evidence, not against its own prior reasoning.

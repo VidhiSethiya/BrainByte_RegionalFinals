@@ -1,11 +1,9 @@
 /**
  * The manager control tower.
  *
- * Four rows: what is happening now, what the trend looks like, what is waiting on a
- * human, and where the system has been wrong lately. Every number on this screen
- * comes from `/analytics/triage` — nothing is summed in the browser from whichever
- * page of rows a table happens to hold, because that number would be wrong and
- * nobody would notice.
+ * KPI strip + filters drive the approval queue; charts visualise load, throughput,
+ * and category mix. Priority open volume is a pie (not four tiles + a duplicate bar).
+ * Every aggregate comes from `/analytics/triage` — nothing is summed from a table page.
  */
 
 import { CheckOutlined, CloudSyncOutlined, ReloadOutlined } from "@ant-design/icons";
@@ -33,12 +31,15 @@ import {
 import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
+  Area,
+  AreaChart,
   Bar,
   BarChart,
   CartesianGrid,
+  Cell,
   Legend,
-  Line,
-  LineChart,
+  Pie,
+  PieChart,
   ResponsiveContainer,
   Tooltip as ReTooltip,
   XAxis,
@@ -47,8 +48,10 @@ import {
 
 import { ApiError, api, type Severity, type TicketRow } from "../api/client";
 import {
+  ANIMATION,
   CHART_HEIGHT,
   GRID,
+  PRIORITY_COLORS,
   SERIES,
   animationFor,
   axisProps,
@@ -57,6 +60,7 @@ import {
 } from "../components/chartTheme";
 import DecisionDrawer from "../components/DecisionDrawer";
 import SeverityTag, {
+  CATEGORY_OPTIONS,
   ConfidenceMeter,
   SEVERITY_OPTIONS,
   TEAM_LABEL,
@@ -66,7 +70,20 @@ import SeverityTag, {
 import StatTile from "../components/StatTile";
 import { useUiStore } from "../store/ui";
 
-const SEVERITY_TONE = { Highest: "error", High: "warning", Medium: "info", Low: "default" } as const;
+type WindowDays = "7" | "30" | "all";
+
+interface ControlFilters {
+  severity?: string;
+  assigned_team?: string;
+  category?: string;
+  window: WindowDays;
+}
+
+const WINDOW_OPTIONS = [
+  { value: "7", label: "Last 7 days" },
+  { value: "30", label: "Last 30 days" },
+  { value: "all", label: "All time" },
+];
 
 function ChartCard({
   title,
@@ -94,11 +111,18 @@ function ChartCard({
   );
 }
 
+function cutoffIso(window: WindowDays): string | undefined {
+  if (window === "all") return undefined;
+  const days = Number(window);
+  return new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+}
+
 export default function Control() {
   const { message: toast } = App.useApp();
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const [overrideTarget, setOverrideTarget] = useState<TicketRow | null>(null);
+  const [filters, setFilters] = useState<ControlFilters>({ window: "30" });
   const [form] = Form.useForm<{ field: "severity" | "assigned_team"; new_value: string; reason: string }>();
 
   const selectedTicketId = useUiStore((state) => state.selectedTicketId);
@@ -106,30 +130,53 @@ export default function Control() {
   const openTicket = useUiStore((state) => state.openTicket);
   const closeDrawer = useUiStore((state) => state.closeDrawer);
 
+  const [syncActive, setSyncActive] = useState(false);
+
   const analytics = useQuery({
     queryKey: ["triage-analytics"],
     queryFn: () => api.triageAnalytics().then((r) => r.data),
-    refetchInterval: 10_000,
+    // Faster poll while Sync Now is in flight so the tower fills as tickets land.
+    refetchInterval: syncActive ? 3_000 : 10_000,
   });
 
-  const approvalParams = useMemo(
-    () => ({
+  const approvalParams = useMemo(() => {
+    // Do not lock to status=awaiting_approval only — failed Syncs used to flip
+    // human-gated SCRUM tickets to status=failed and they dropped out of this list.
+    const filter: Record<string, string> = {};
+    if (filters.severity) filter.severity = filters.severity;
+    if (filters.assigned_team) filter.assigned_team = filters.assigned_team;
+    if (filters.category) filter.category = filters.category;
+    return {
       page: 1,
-      page_size: 20,
+      page_size: 50,
       sort: "priority_score",
       order: "desc" as const,
-      // Human gate: awaiting_approval OR needs_human (backend may set either).
-      filter: { status: "awaiting_approval" },
-    }),
-    []
-  );
+      filter,
+    };
+  }, [filters.severity, filters.assigned_team, filters.category]);
 
   const approvals = useQuery({
-    queryKey: ["team-queue", approvalParams],
+    queryKey: ["team-queue", "approval", approvalParams],
     queryFn: () => api.teamQueue(approvalParams),
-    refetchInterval: 10_000,
+    refetchInterval: syncActive ? 3_000 : 10_000,
   });
 
+  const approvalRows = useMemo(() => {
+    const rows = approvals.data?.data ?? [];
+    return rows.filter((row) => {
+      // Routed / approved / overridden decisions leave this queue.
+      if (row.status === "routed" || row.status === "approved" || row.status === "synced" || row.status === "resolved") {
+        return false;
+      }
+      if (!row.needs_human) return false;
+      if (row.status === "awaiting_approval") return true;
+      // Still needs a human, already classified — show even if last sync failed.
+      if (row.severity && row.assigned_team) {
+        return row.status === "failed" || row.status === "triaged" || row.status === "new";
+      }
+      return false;
+    });
+  }, [approvals.data?.data]);
   const invalidate = () =>
     ["tickets", "team-queue", "triage-analytics"].forEach((key) =>
       queryClient.invalidateQueries({ queryKey: [key] })
@@ -137,6 +184,7 @@ export default function Control() {
 
   const syncNow = useMutation({
     mutationFn: () => {
+      setSyncActive(true);
       toast.open({
         type: "loading",
         content: "Syncing Jira — pull + triage can take several minutes…",
@@ -163,6 +211,10 @@ export default function Control() {
         key: "jira-sync",
         duration: 6,
       }),
+    onSettled: () => {
+      setSyncActive(false);
+      invalidate();
+    },
   });
 
   const approve = useMutation({
@@ -184,7 +236,9 @@ export default function Control() {
     mutationFn: (input: { id: string; field: string; new_value: string; reason: string }) =>
       api.override(input.id, { field: input.field, new_value: input.new_value, reason: input.reason }),
     onSuccess: ({ data }) => {
-      toast.success(`Override saved on ${data.external_id}`);
+      toast.success(
+        `Override routed — ${data.external_id} · ${data.severity || "—"} (written to Jira)`
+      );
       setOverrideTarget(null);
       form.resetFields();
       invalidate();
@@ -194,20 +248,49 @@ export default function Control() {
 
   const data = analytics.data;
   const loading = analytics.isPending;
-  const countFor = (severity: Severity) =>
-    data?.by_severity.find((entry) => entry.severity === severity)?.count;
+  const since = cutoffIso(filters.window);
 
-  // The only tile with a real history behind it: `over_time` carries triaged and
-  // overridden per day, so the override-rate sparkline is measured, not invented.
-  const overrideTrend = (data?.over_time ?? [])
-    .filter((day) => day.triaged > 0)
-    .map((day) => (day.overridden / day.triaged) * 100);
+  const priorityPie = useMemo(() => {
+    const counts = new Map(
+      (data?.by_severity ?? []).map((entry) => [entry.severity, entry.count] as const)
+    );
+    return (["Highest", "High", "Medium", "Low"] as Severity[])
+      .filter((severity) => !filters.severity || filters.severity === severity)
+      .map((severity) => ({
+        name: severity,
+        value: counts.get(severity) ?? 0,
+      }))
+      .filter((slice) => slice.value > 0 || !filters.severity);
+  }, [data?.by_severity, filters.severity]);
 
-  const teamSeries = (data?.by_team ?? []).map((entry) => ({
-    team: TEAM_LABEL[entry.team],
-    open: entry.open,
-    capacity: entry.capacity,
-  }));
+  const teamUtilization = useMemo(() => {
+    return (data?.by_team ?? [])
+      .filter((entry) => !filters.assigned_team || entry.team === filters.assigned_team)
+      .map((entry) => {
+        const util = entry.capacity > 0 ? Math.round((entry.open / entry.capacity) * 100) : 0;
+        return {
+          team: TEAM_LABEL[entry.team],
+          open: entry.open,
+          capacity: entry.capacity,
+          utilization: util,
+          oldest_hours: Math.round((entry.oldest_age_mins || 0) / 60),
+        };
+      });
+  }, [data?.by_team, filters.assigned_team]);
+
+  const throughput = useMemo(() => {
+    return (data?.over_time ?? []).filter((day) => !since || day.date >= since);
+  }, [data?.over_time, since]);
+
+  const categoryMix = useMemo(() => {
+    return (data?.by_category ?? [])
+      .filter((entry) => !filters.category || entry.category === filters.category)
+      .slice()
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 8);
+  }, [data?.by_category, filters.category]);
+
+  const filtersActive = !!(filters.severity || filters.assigned_team || filters.category || filters.window !== "30");
 
   if (analytics.error) {
     return (
@@ -231,19 +314,18 @@ export default function Control() {
         <Flex vertical gap={4}>
           <h1 className="page-title">Control Tower</h1>
           <p className="page-subtitle">
-            Four queues, one view — what is at risk, what is waiting on you, and where the system
-            has been wrong.
+            What is at risk, what is waiting on you, and where load is piling up.
           </p>
         </Flex>
         <Space>
-          <Tooltip title="Pull new/updated issues from Jira and run triage (may take several minutes).">
+          <Tooltip title="Pull new/updated Jira issues and triage them. Charts refresh every 3s while sync runs.">
             <Button
               type="primary"
-              icon={<CloudSyncOutlined />}
+              icon={<CloudSyncOutlined spin={syncNow.isPending} />}
               loading={syncNow.isPending}
               onClick={() => syncNow.mutate()}
             >
-              Sync Now
+              {syncNow.isPending ? "Syncing…" : "Sync Now"}
             </Button>
           </Tooltip>
           <Button icon={<ReloadOutlined />} loading={analytics.isFetching} onClick={() => analytics.refetch()}>
@@ -252,161 +334,176 @@ export default function Control() {
         </Space>
       </Flex>
 
-      <Row gutter={[16, 16]}>
-        {(["Highest", "High", "Medium", "Low"] as Severity[]).map((severity) => (
-          <Col xs={12} md={6} xl={3} key={severity}>
-            <StatTile
-              label={`${severity} open`}
-              value={countFor(severity)}
-              tone={SEVERITY_TONE[severity]}
-              loading={loading}
-            />
-          </Col>
-        ))}
-        <Col xs={12} md={6} xl={3}>
-          <StatTile
-            label="SLA at risk"
-            value={data?.sla_at_risk}
-            tone={data?.sla_at_risk ? "warning" : "default"}
-            loading={loading}
-            hint="Under 30 minutes to the response target"
+      <Card size="small" className="control-filters">
+        <Flex gap={12} wrap align="center">
+          <span className="label">Filters</span>
+          <Select
+            allowClear
+            placeholder="Priority"
+            style={{ width: 140 }}
+            options={SEVERITY_OPTIONS}
+            value={filters.severity}
+            onChange={(severity) => setFilters((prev) => ({ ...prev, severity }))}
           />
-        </Col>
-        <Col xs={12} md={6} xl={3}>
-          <StatTile
-            label="Awaiting approval"
-            value={data?.awaiting_approval}
-            tone={data?.awaiting_approval ? "warning" : "default"}
-            loading={loading}
+          <Select
+            allowClear
+            placeholder="Team"
+            style={{ width: 140 }}
+            options={TEAM_OPTIONS}
+            value={filters.assigned_team}
+            onChange={(assigned_team) => setFilters((prev) => ({ ...prev, assigned_team }))}
           />
-        </Col>
-        <Col xs={12} md={6} xl={3}>
-          <StatTile
-            label="Classification accuracy"
-            value={data ? (data.classification_accuracy * 100).toFixed(1) : null}
-            suffix="%"
-            tone="success"
-            loading={loading}
-            hint="Against the labelled eval set"
+          <Select
+            allowClear
+            placeholder="Category"
+            style={{ width: 160 }}
+            options={CATEGORY_OPTIONS}
+            value={filters.category}
+            onChange={(category) => setFilters((prev) => ({ ...prev, category }))}
           />
-        </Col>
-        <Col xs={12} md={6} xl={3}>
-          <StatTile
-            label="Routing precision"
-            value={data ? (data.routing_precision * 100).toFixed(1) : null}
-            suffix="%"
-            tone="success"
-            loading={loading}
+          <Select
+            style={{ width: 150 }}
+            options={WINDOW_OPTIONS}
+            value={filters.window}
+            onChange={(window: WindowDays) => setFilters((prev) => ({ ...prev, window }))}
           />
-        </Col>
-        <Col xs={12} md={6} xl={3}>
-          <StatTile
-            label="Override rate"
-            value={data ? (data.override_rate * 100).toFixed(1) : null}
-            suffix="%"
-            tone={data && data.override_rate > 0.2 ? "warning" : "default"}
-            trend={overrideTrend}
-            loading={loading}
-            hint="How often a human corrected the system"
-          />
-        </Col>
-        <Col xs={12} md={6} xl={3}>
-          <StatTile
-            label="Priority MAE"
-            value={data ? data.severity_mae.toFixed(2) : null}
-            loading={loading}
-            hint="Mean absolute error in Priority levels (Highest=1 … Low=4)"
-          />
-        </Col>
-        <Col xs={12} md={6} xl={3}>
-          <StatTile
-            label="Avg cost / decision"
-            value={data ? `$${data.avg_cost_usd.toFixed(4)}` : null}
-            loading={loading}
-          />
-        </Col>
-        <Col xs={12} md={6} xl={3}>
-          <StatTile
-            label="Avg latency"
-            value={data ? (data.avg_latency_ms / 1000).toFixed(1) : null}
-            suffix="s"
-            loading={loading}
-          />
-        </Col>
-        <Col xs={12} md={6} xl={3}>
-          <StatTile
-            label="Tokens today"
-            value={data?.tokens_today?.toLocaleString() ?? null}
-            loading={loading}
-            hint="Reported by the analytics endpoint, not summed in the browser"
-          />
-        </Col>
-      </Row>
+          {filtersActive && (
+            <Button
+              type="link"
+              onClick={() => setFilters({ window: "30" })}
+              style={{ paddingInline: 0 }}
+            >
+              Reset
+            </Button>
+          )}
+        </Flex>
+      </Card>
+
+      <div className="control-kpi-grid control-kpi-grid--slim">
+        <StatTile
+          compact
+          label="SLA at risk"
+          value={data?.sla_at_risk}
+          tone={data?.sla_at_risk ? "warning" : "default"}
+          hint="Under 30 minutes to the response target"
+          loading={loading}
+        />
+        <StatTile
+          compact
+          label="Awaiting approval"
+          value={data?.awaiting_approval}
+          tone={data?.awaiting_approval ? "warning" : "default"}
+          loading={loading}
+        />
+        <StatTile
+          compact
+          label="Override rate"
+          value={data ? (data.override_rate * 100).toFixed(1) : null}
+          suffix="%"
+          tone={data && data.override_rate > 0.2 ? "warning" : "default"}
+          hint="How often a human corrected the system"
+          loading={loading}
+        />
+      </div>
 
       <Row gutter={[16, 16]}>
-        <Col xs={24} xl={12}>
-          <ChartCard title="Open tickets by Priority" loading={loading} empty={!data?.by_severity.length}>
-            <BarChart data={data?.by_severity ?? []}>
-              <CartesianGrid stroke={GRID} strokeDasharray="3 3" vertical={false} />
-              <XAxis dataKey="severity" {...axisProps} />
-              <YAxis allowDecimals={false} {...axisProps} />
+        <Col xs={24} lg={12} xl={8}>
+          <ChartCard
+            title="Open volume by Priority"
+            loading={loading}
+            empty={!priorityPie.some((slice) => slice.value > 0)}
+          >
+            <PieChart>
+              <Pie
+                data={priorityPie}
+                dataKey="value"
+                nameKey="name"
+                cx="50%"
+                cy="50%"
+                innerRadius={52}
+                outerRadius={88}
+                paddingAngle={2}
+                {...ANIMATION}
+              >
+                {priorityPie.map((slice) => (
+                  <Cell key={slice.name} fill={PRIORITY_COLORS[slice.name] ?? SERIES[0]} />
+                ))}
+              </Pie>
               <ReTooltip {...tooltipProps} />
               <Legend {...legendProps} />
-              <Bar dataKey="count" name="open" fill={SERIES[0]} radius={[4, 4, 0, 0]} {...animationFor(0)} />
+            </PieChart>
+          </ChartCard>
+        </Col>
+
+        <Col xs={24} lg={12} xl={8}>
+          <ChartCard title="Team utilization (% of capacity)" loading={loading} empty={!teamUtilization.length}>
+            <BarChart data={teamUtilization} layout="vertical" margin={{ left: 8, right: 12 }}>
+              <CartesianGrid stroke={GRID} strokeDasharray="3 3" horizontal={false} />
+              <XAxis type="number" domain={[0, "dataMax"]} unit="%" {...axisProps} />
+              <YAxis type="category" dataKey="team" width={64} {...axisProps} />
+              <ReTooltip
+                {...tooltipProps}
+                formatter={(value: number | string, _name: string, item) => {
+                  const row = item?.payload as { open?: number; capacity?: number } | undefined;
+                  return [`${value}% (${row?.open ?? 0}/${row?.capacity ?? 0} open)`, "Utilization"];
+                }}
+              />
+              <Bar dataKey="utilization" name="utilization" fill={SERIES[0]} radius={[0, 4, 4, 0]} {...animationFor(0)} />
+            </BarChart>
+          </ChartCard>
+        </Col>
+
+        <Col xs={24} lg={12} xl={8}>
+          <ChartCard title="Oldest open ticket age (hours)" loading={loading} empty={!teamUtilization.length}>
+            <BarChart data={teamUtilization} layout="vertical" margin={{ left: 8, right: 12 }}>
+              <CartesianGrid stroke={GRID} strokeDasharray="3 3" horizontal={false} />
+              <XAxis type="number" allowDecimals={false} {...axisProps} />
+              <YAxis type="category" dataKey="team" width={64} {...axisProps} />
+              <ReTooltip {...tooltipProps} />
+              <Bar dataKey="oldest_hours" name="hours" fill={SERIES[2]} radius={[0, 4, 4, 0]} {...animationFor(0)} />
             </BarChart>
           </ChartCard>
         </Col>
 
         <Col xs={24} xl={12}>
-          <ChartCard title="Load against capacity, by team" loading={loading} empty={!teamSeries.length}>
-            <BarChart data={teamSeries}>
-              <CartesianGrid stroke={GRID} strokeDasharray="3 3" vertical={false} />
-              <XAxis dataKey="team" {...axisProps} />
-              <YAxis allowDecimals={false} {...axisProps} />
-              <ReTooltip {...tooltipProps} />
-              <Legend {...legendProps} />
-              <Bar dataKey="open" name="open" fill={SERIES[0]} radius={[4, 4, 0, 0]} {...animationFor(0)} />
-              <Bar dataKey="capacity" name="capacity" fill={SERIES[1]} radius={[4, 4, 0, 0]} {...animationFor(1)} />
-            </BarChart>
-          </ChartCard>
-        </Col>
-
-        <Col xs={24} xl={12}>
-          <ChartCard title="Decisions over time, with overrides" loading={loading} empty={!data?.over_time.length}>
-            <LineChart data={data?.over_time ?? []}>
+          <ChartCard title="Triage throughput vs overrides" loading={loading} empty={!throughput.length}>
+            <AreaChart data={throughput}>
               <CartesianGrid stroke={GRID} strokeDasharray="3 3" />
               <XAxis dataKey="date" {...axisProps} />
               <YAxis allowDecimals={false} {...axisProps} />
               <ReTooltip {...tooltipProps} />
               <Legend {...legendProps} />
-              <Line
+              <Area
+                type="monotone"
                 dataKey="triaged"
                 name="triaged"
                 stroke={SERIES[0]}
-                dot={false}
+                fill={SERIES[0]}
+                fillOpacity={0.18}
                 strokeWidth={2}
                 {...animationFor(0)}
               />
-              <Line
+              <Area
+                type="monotone"
                 dataKey="overridden"
                 name="overridden"
                 stroke={SERIES[2]}
-                dot={false}
+                fill={SERIES[2]}
+                fillOpacity={0.22}
                 strokeWidth={2}
                 {...animationFor(1)}
               />
-            </LineChart>
+            </AreaChart>
           </ChartCard>
         </Col>
 
         <Col xs={24} xl={12}>
-          <ChartCard title="Category mix" loading={loading} empty={!data?.by_category?.length}>
-            <BarChart data={data?.by_category ?? []} layout="vertical" margin={{ left: 24 }}>
+          <ChartCard title="Top categories in the backlog" loading={loading} empty={!categoryMix.length}>
+            <BarChart data={categoryMix} layout="vertical" margin={{ left: 24 }}>
               <CartesianGrid stroke={GRID} strokeDasharray="3 3" horizontal={false} />
               <XAxis type="number" allowDecimals={false} {...axisProps} />
               <YAxis type="category" dataKey="category" width={110} {...axisProps} />
               <ReTooltip {...tooltipProps} />
-              <Legend {...legendProps} />
               <Bar dataKey="count" name="tickets" fill={SERIES[3]} radius={[0, 4, 4, 0]} {...animationFor(0)} />
             </BarChart>
           </ChartCard>
@@ -418,7 +515,7 @@ export default function Control() {
           rowKey="id"
           size="small"
           loading={approvals.isFetching && !approvals.data}
-          dataSource={approvals.data?.data ?? []}
+          dataSource={approvalRows}
           scroll={{ x: true }}
           pagination={false}
           locale={{
@@ -463,7 +560,6 @@ export default function Control() {
               render: (value: number) => <ConfidenceMeter value={value} />,
             },
             {
-              // The most important column: why the system refused to decide alone.
               title: "Why it stopped",
               dataIndex: "id",
               width: 240,
@@ -514,7 +610,9 @@ export default function Control() {
             rowKey="ticket_id"
             size="small"
             loading={loading}
-            dataSource={(data?.recent_overrides ?? []).slice(0, 10)}
+            dataSource={(data?.recent_overrides ?? [])
+              .filter((row) => !filters.severity || row.from === filters.severity || row.to === filters.severity)
+              .slice(0, 10)}
             pagination={false}
             scroll={{ x: true }}
             locale={{
@@ -534,7 +632,7 @@ export default function Control() {
               {
                 title: "Change",
                 width: 140,
-                render: (_v, row: any) => (
+                render: (_v, row: { from: string; to: string }) => (
                   <span className="data">
                     {row.from} → {row.to}
                   </span>
