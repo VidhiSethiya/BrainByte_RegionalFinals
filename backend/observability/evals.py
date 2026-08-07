@@ -270,7 +270,7 @@ def _persist(scores: list[EvalScore]) -> None:
 # from EVAL_SET above — this scores the *triage graph*
 # (ai.agents.run_triage/ingest_and_triage), not retrieval-augmented chat.
 
-SEVERITY_ORDER = {"S1": 1, "S2": 2, "S3": 3, "S4": 4}
+SEVERITY_ORDER = {"Highest": 1, "High": 2, "Medium": 3, "Low": 4}
 
 
 def score_triage_accuracy(
@@ -347,7 +347,10 @@ def score_triage_accuracy(
             category_correct += 1
         if row.assigned_team and row.assigned_team == row.true_team:
             team_correct += 1
-        pred_sev, gold_sev = row.severity or "?", row.true_severity or "?"
+        from rag.schemas import normalize_severity
+
+        pred_sev = normalize_severity(row.severity) or (row.severity or "?")
+        gold_sev = normalize_severity(row.true_severity) or (row.true_severity or "?")
         key = (gold_sev, pred_sev)
         confusion[key] = confusion.get(key, 0) + 1
         if pred_sev in SEVERITY_ORDER and gold_sev in SEVERITY_ORDER:

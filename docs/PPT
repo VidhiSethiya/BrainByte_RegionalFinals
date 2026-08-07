@@ -1,1 +1,19 @@
 https://claude.ai/design?via=install_hub_card
+
+
+Two real tickets:
+
+Cosmetic bug on the checkout page, during a sale	Internal dev tool completely down
+How bad	Every customer sees it — high impact	8 engineers affected — moderate impact
+How fast	Nobody is blocked, no clock — low urgency	Release blocked today — high urgency
+One flat score	~50	~50
+Same number. Opposite responses. One waits for the next sprint; one is worked now.
+
+Keep them on separate axes and nothing is lost. Pick a row (how bad), pick a column (how fast), read the cell:
+
+Impact ↓ / Urgency →	Critical	High	Medium	Low
+Extensive	P1	P1	P2	P3
+Significant	P1	P2	P2	P3
+Moderate	P2	P3	P3	P4
+Minor	P3	P3	P4	P4
+The checkout bug lands Extensive × Low → P3. The dev tool lands Moderate × High → P3

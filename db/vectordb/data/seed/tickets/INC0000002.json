@@ -8,10 +8,10 @@
   "channel": "synthetic",
   "team": "azure",
   "category": "performance",
-  "severity": "S2",
+  "severity": "High",
   "resolved": false,
   "resolution_minutes": null,
   "true_category": "performance",
-  "true_severity": "S2",
+  "true_severity": "High",
   "true_team": "azure"
 }

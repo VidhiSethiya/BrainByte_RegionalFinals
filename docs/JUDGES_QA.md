@@ -19,11 +19,11 @@ get wrong and spent tokens there.
 
 | Tier | Model | Used for | Share of calls |
 |---|---|---|---|
-| Deep | `genailab-maas-gpt-5.1` | Severity + priority, self-reflection, manager Q&A | ~15% |
+| Deep | `genailab-maas-gpt-5.1` | Priority (Highest-Low) + self-reflection, self-reflection, manager Q&A | ~15% |
 | Standard | `azure/genailab-maas-gpt-4.1` | Answer generation, classification, routing | ~15% |
 | Fast | `azure/genailab-maas-gpt-4.1-mini` | Plan, query rewrite, retrieval grading, guardrail JSON, summaries | ~70% |
 
-Severity is the decision with the largest blast radius — a wrong S1 breaches an SLA and
+Severity is the decision with the largest blast radius — A wrong Highest breaches an SLA and
 wakes the wrong on-call — so it gets the strongest model available. Guardrail JSON is
 short and schema-bound, so it gets a mini model. [PLACEHOLDER: state the measured
 accuracy delta between fast and deep on the classification eval, and the resulting
@@ -169,8 +169,8 @@ isolation.
 **Q: What stops the agent doing something it shouldn't with those tools?**
 The registry declares scope per tool: `requires_role` and `writes`. `tools.call()` refuses
 any write tool unless the decision is in state `approved`, or auto-approval applies
-(confidence ≥ 0.85 **and** severity S3/S4). A refusal writes `tool.denied` to the audit
-log. Try syncing an unapproved S1 in the demo and watch it get blocked. The only write
+(confidence ≥ 0.85 **and** Priority Medium/Low). A refusal writes `tool.denied` to the audit
+log. Try syncing an unapproved Highest in the demo and watch it get blocked. The only write
 tool in the system updates a ticket — there is no tool that can restart a service, run a
 command, or close a ticket.
 
@@ -188,7 +188,7 @@ still shares a model family with the generator, so it inherits blind spots — w
 low confidence routes to a human rather than to another retry.
 
 **Q: What does the system do when it is not sure?**
-It stops and says so. Confidence below 0.70, any S1, any guardrail firing, or an ambiguous
+It stops and says so. Confidence below 0.70, any Highest Priority, any guardrail firing, or an ambiguous
 duplicate sends the ticket to the manager's approval queue with the escalation reason
 stated. The degradation ladder below that is deep model → fast model → deterministic
 keyword routing from the service catalogue → unassigned human queue. It never degrades to
@@ -350,7 +350,7 @@ recall, hallucination rate, p95 latency. Do not present a dashboard of zeros.]
 
 ## Domain-specific
 
-**Q: A manager asks "how many S1 incidents this week?" — how do you know the number isn't
+**Q: A manager asks "how many Highest incidents this week?" — how do you know the number isn't
 hallucinated?**
 Because the model never counts. That question routes to `ticket_stats`, a deterministic
 SQL aggregate; the returned numbers enter the prompt as trusted context and the model only
@@ -360,14 +360,14 @@ threshold, and it is the one design decision we would defend hardest: an LLM ask
 count rows in a corpus will produce a plausible number, and plausible is the failure mode.
 
 **Q: What does a wrong answer actually cost here?**
-A mis-severitied S1 breaches a contractual SLA and pages the wrong on-call at 3am. A
+A mis-prioritised Highest breaches a contractual SLA and pages the wrong on-call at 3am. A
 mis-routed ticket ping-pongs between teams and burns the response window. Neither is
 life-threatening, both are expensive, and — unlike most AI failure modes — both are
 **measurable after the fact**. That is why the guardrails escalate to a human rather than
 refusing silently: in this domain, "no decision" is also a cost.
 
 **Q: Who is accountable for a decision the system made?**
-The human who accepted it. Every S1 and every decision below 0.70 confidence requires
+The human who accepted it. Every Highest Priority and every decision below 0.70 confidence requires
 explicit approval; every override records who, when and why. The system produces a
 recommendation with its evidence attached — it never closes a ticket, never executes a
 remediation, and never acts without a person in the loop on anything consequential.
@@ -427,11 +427,11 @@ Each node has **one job, one validated output shape**:
 | **enrich** | Retrieve context | Query + user + summary | Top 6 chunks via Shashank's retrieve() |
 | **grade** | CRAG grading | Chunks | Keep or re-retrieve once (corrective loop) |
 | **classify** | Category inference | Chunks + question | TriageVerdict (enum-constrained, no hallucination) |
-| **assess** | Severity via deep model | Chunks + context | SeverityVerdict (S1–S4, SLA match) |
+| **assess** | Severity via deep model | Chunks + context | SeverityVerdict (Highest–S4, SLA match) |
 | **route** | Team assignment | Severity + service | RoutingVerdict (team + capacity check) |
 | **reflect** | Self-critique | Decision + evidence | Lower confidence if evidence gaps exist |
 | **verify** | Output guard | Answer | Block if hallucinated or policy fires |
-| **gate** | Human escalation | Confidence + severity | Flag for approval if S1 or <0.70 confidence |
+| **gate** | Human escalation | Confidence + severity | Flag for approval if Highest or <0.70 confidence |
 | **sync** | Jira write-back | Approved decision | Update ticket in Jira + audit entry |
 
 ---
@@ -466,7 +466,7 @@ This is **NOT** a multi-agent system in the strict sense (concurrent agents with
 >
 > **Q: What stops the agent doing something it shouldn't with those tools?**
 >
-> The registry declares scope per tool: `requires_role` and `writes`. `tools.call()` refuses any write tool unless the decision is in state `approved`, or auto-approval applies (confidence ≥ 0.85 **and** severity S3/S4). A refusal writes `tool.denied` to the audit log.
+> The registry declares scope per tool: `requires_role` and `writes`. `tools.call()` refuses any write tool unless the decision is in state `approved`, or auto-approval applies (confidence ≥ 0.85 **and** Priority Medium/Low). A refusal writes `tool.denied` to the audit log.
 
 ---
 

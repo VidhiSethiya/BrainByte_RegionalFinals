@@ -264,7 +264,7 @@ CONFIDENCE_HUMAN_FLOOR = 0.70
 # to sync an unapproved decision — lives in ai/tools.py::ticket_update (Phase 2);
 # this graph never calls Jira directly, per rag-handoff.md §8.
 AUTO_APPROVE_CONFIDENCE = 0.85
-AUTO_APPROVE_SEVERITIES = {"S3", "S4"}
+AUTO_APPROVE_SEVERITIES = {"Medium", "Low"}
 
 # How many chunks enrich asks for. Higher than the chat graph's default top_k
 # because one ticket decision needs evidence from up to four doc_types in one
@@ -539,7 +539,7 @@ def triage_classify(state: TriageState) -> TriageState:
 
 def triage_assess(state: TriageState) -> TriageState:
     """Severity + priority. Routed to the deep model tier — this is the decision
-    with the largest blast radius (a wrong S1 pages an on-call at 3am and can
+    with the largest blast radius (a wrong Highest pages an on-call at 3am and can
     breach a contractual SLA), so it gets the strongest model in the fleet."""
     trace = state.get("trace")
     ticket = state["ticket"]
@@ -559,7 +559,7 @@ def triage_assess(state: TriageState) -> TriageState:
     verdict = validate_json(
         raw,
         SeverityVerdict,
-        default=SeverityVerdict(severity="S3", priority_score=50, sla_target_mins=240, confidence=0.0),
+        default=SeverityVerdict(severity="Medium", priority_score=50, sla_target_mins=240, confidence=0.0),
     )
     return {
         "severity": verdict.severity,
@@ -608,7 +608,7 @@ def triage_route(state: TriageState) -> TriageState:
             ticket_summary=summary,
             category=state.get("category", ""),
             subcategory=state.get("subcategory", ""),
-            severity=state.get("severity", "S3"),
+            severity=state.get("severity", "Medium"),
             context=context or "(no service catalogue retrieved)",
         ),
         tier="standard",
@@ -654,7 +654,7 @@ def triage_reflect(state: TriageState) -> TriageState:
         REFLECT_PROMPT.format(
             category=state.get("category", ""),
             subcategory=state.get("subcategory", ""),
-            severity=state.get("severity", "S3"),
+            severity=state.get("severity", "Medium"),
             priority_score=state.get("priority_score", 50),
             assigned_team=state.get("assigned_team", "ops"),
             confidence=base_confidence,
@@ -694,7 +694,7 @@ def _compose_rationale(state: TriageState) -> str:
         f"Classified as {state.get('category', '')}/{state.get('subcategory', '')} "
         f"(service: {state.get('service') or ticket.application}). "
         f"{state.get('classify_rationale', '')}",
-        f"Severity {state.get('severity', 'S3')}, priority {state.get('priority_score', 50)}, "
+        f"Priority {state.get('severity', 'Medium')}, score {state.get('priority_score', 50)}, "
         f"SLA target {state.get('sla_target_mins', 0)} minutes. {state.get('assess_rationale', '')}",
         f"Routed to {state.get('assigned_team', 'ops')}. {state.get('route_rationale', '')}",
     ]
@@ -739,8 +739,8 @@ def triage_gate(state: TriageState) -> TriageState:
     reasons = []
     if state.get("blocked"):
         reasons.append(f"guardrail: {state.get('blocked_reason') or 'blocked'}")
-    if state.get("severity") == "S1":
-        reasons.append("severity S1 always requires approval")
+    if state.get("severity") == "Highest":
+        reasons.append("Priority Highest always requires approval")
     confidence = state.get("confidence", 0.0)
     if confidence < CONFIDENCE_HUMAN_FLOOR:
         reasons.append(f"confidence {confidence:.2f} below the {CONFIDENCE_HUMAN_FLOOR:.2f} floor")
@@ -771,7 +771,7 @@ def triage_sync(state: TriageState) -> TriageState:
         ticket_id=ticket.id,
         category=state.get("category", ""),
         subcategory=state.get("subcategory", ""),
-        severity=state.get("severity", "S3"),
+        severity=state.get("severity", "Medium"),
         priority_score=state.get("priority_score", 50),
         assigned_team=state.get("assigned_team", "ops"),
         sla_target_mins=state.get("sla_target_mins", 0),
@@ -1058,14 +1058,14 @@ def ingest_and_triage(raw_ticket: dict, user: dict) -> tuple[TicketRow, TriageSt
                     )
                 else:
                     try:
-                        from integrations.jira import priority_group
+                        from integrations.jira import normalize_priority
 
                         src = get_ticket_source()
-                        pgroup = priority_group(decision.severity) or "Medium"
+                        pname = normalize_priority(decision.severity) or "Medium"
                         src.add_comment(
                             external_key,
-                            f"TicketSphere auto-approved: {decision.severity} · "
-                            f"Priority {pgroup} · {decision.assigned_team} · "
+                            f"TicketSphere auto-approved: {pname} · "
+                            f"{decision.assigned_team} · "
                             f"confidence {decision.confidence:.0%}. "
                             f"{(decision.rationale or '')[:400]}",
                         )

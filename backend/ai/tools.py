@@ -3,10 +3,10 @@ enforces write scope.
 
 Read tools are open to any authenticated role (`requires_role=None`) or gated to
 one role (`ticket_stats` is manager/admin only — it backs the manager chatbot's
-"how many S1 this week" answers, and an engineer has no legitimate reason to pull
+"how many Highest this week" answers, and an engineer has no legitimate reason to pull
 cross-team aggregates). The one write tool, `ticket_update`, refuses unless the
 ticket's decision is already approved or the auto-approval band applies
-(confidence >= 0.85 AND severity in {S3, S4}) — this is where that rule is
+(confidence >= 0.85 AND severity in {Medium, Low}) — this is where that rule is
 actually *enforced*, not just previewed the way ai/agents.py::triage_sync's status
 bookkeeping does. A refusal is audited as `tool.denied`, never silently swallowed.
 
@@ -40,7 +40,7 @@ TEAM_CAPACITY_DEFAULT = 10
 # change one, change both; there is no automated check (this project ships no
 # test suite, CLAUDE.md golden rule 3), so this comment is the whole guardrail.
 AUTO_APPROVE_CONFIDENCE = 0.85
-AUTO_APPROVE_SEVERITIES = {"S3", "S4"}
+AUTO_APPROVE_SEVERITIES = {"Medium", "Low"}
 
 
 class ToolDenied(RuntimeError):
@@ -123,7 +123,7 @@ def ticket_stats(
         by_status[row.status] = by_status.get(row.status, 0) + 1
         if row.status == "awaiting_approval":
             awaiting_approval += 1
-        if row.severity == "S1" and row.status not in ("resolved", "synced"):
+        if row.severity == "Highest" and row.status not in ("resolved", "synced"):
             sla_at_risk += 1
 
     return TicketStats(
@@ -353,7 +353,10 @@ def triage_analytics(user: dict | None = None) -> dict:
 
     for row in rows:
         if row.severity:
-            by_severity[row.severity] = by_severity.get(row.severity, 0) + 1
+            from rag.schemas import normalize_severity
+
+            sev = normalize_severity(row.severity) or row.severity
+            by_severity[sev] = by_severity.get(sev, 0) + 1
         if row.category:
             by_category[row.category] = by_category.get(row.category, 0) + 1
         if row.overridden_by:
@@ -367,7 +370,7 @@ def triage_analytics(user: dict | None = None) -> dict:
             by_team_oldest[row.assigned_team] = max(by_team_oldest.get(row.assigned_team, 0), age)
         if row.status == "awaiting_approval":
             awaiting_approval += 1
-        if row.severity == "S1" and is_open:
+        if row.severity == "Highest" and is_open:
             sla_at_risk += 1
         if row.created_at:
             day = row.created_at.date().isoformat()
@@ -433,8 +436,8 @@ def triage_analytics(user: dict | None = None) -> dict:
                     0,
                 ),
             }
-            for actual in ("S1", "S2", "S3", "S4")
-            for pred in ("S1", "S2", "S3", "S4")
+            for actual in ("Highest", "High", "Medium", "Low")
+            for pred in ("Highest", "High", "Medium", "Low")
         ],
         # field/from is not structurally tracked on Ticket (only the free-text
         # override_reason is) — a future TicketRow.override_history JSON column
