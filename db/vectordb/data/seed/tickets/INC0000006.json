@@ -1,0 +1,17 @@
+{
+  "external_id": "INC0000006",
+  "source": "synthetic",
+  "title": "aks-prod-01: auth tokens rejected after rotate",
+  "body": "Summary\naks-prod-01 \u2014 auth tokens rejected after rotate\nDescription\nSeeing ORA-01555 on aks-prod-01 in prod. auth tokens rejected after rotate.\nEnvironment\nprod\nLogs\n[INC0000006] ORA-01555 stack near handler; correlation 8837462910",
+  "application": "aks-prod-01",
+  "environment": "prod",
+  "channel": "synthetic",
+  "team": "azure",
+  "category": "identity",
+  "severity": "S2",
+  "resolved": false,
+  "resolution_minutes": null,
+  "true_category": "identity",
+  "true_severity": "S2",
+  "true_team": "azure"
+}

@@ -168,7 +168,11 @@ def ticket_update(
     actual enforcement point BLUEPRINT.md §5 and rag-handoff.md §8 describe —
     never bypassed by calling JiraSource.update() directly, which is why every
     write path in api.py goes through tools.call("ticket_update", ...), not the
-    ticket source's update() method."""
+    ticket source's update() method.
+
+    ``ticket_id`` is the SQLite primary key; the adapter always receives
+    ``Ticket.external_id`` (Jira key e.g. SCRUM-5).
+    """
     approved = ticket_status in ("approved", "routed", "synced")
     auto_approved = (
         not approved
@@ -193,20 +197,50 @@ def ticket_update(
             f"(status={ticket_status}, confidence={confidence:.2f}, severity={severity})"
         )
 
+    with SessionLocal() as s:
+        row = s.get(TicketRow, ticket_id)
+        if row is None:
+            raise ToolDenied(f"ticket_update denied for {ticket_id}: ticket not found")
+        external_id = (row.external_id or "").strip()
+
+    if not external_id:
+        audit.record(
+            "tool.denied",
+            user_id=(user or {}).get("id"),
+            resource=ticket_id,
+            tool="ticket_update",
+            reason="missing external_id (Jira issue key)",
+        )
+        raise ToolDenied(
+            f"ticket_update denied for {ticket_id}: missing external_id (Jira key)"
+        )
+
     source = get_ticket_source()
-    source.update(ticket_id, fields)
-    log.info("ticket_update: %s <- %s (auto_approved=%s, via %s)",
-             ticket_id, fields, auto_approved, source.name)
+    source.update(external_id, fields)
+    log.info(
+        "ticket_update: %s (external_id=%s) <- %s (auto_approved=%s, via %s)",
+        ticket_id,
+        external_id,
+        fields,
+        auto_approved,
+        source.name,
+    )
     audit.record(
         "tool.executed",
         user_id=(user or {}).get("id"),
         resource=ticket_id,
         tool="ticket_update",
+        external_id=external_id,
         fields=list(fields.keys()),
         auto_approved=auto_approved,
         source=source.name,
     )
-    return {"ticket_id": ticket_id, "updated": list(fields.keys()), "auto_approved": auto_approved}
+    return {
+        "ticket_id": ticket_id,
+        "external_id": external_id,
+        "updated": list(fields.keys()),
+        "auto_approved": auto_approved,
+    }
 
 
 # --- registry + choke point ---------------------------------------------------

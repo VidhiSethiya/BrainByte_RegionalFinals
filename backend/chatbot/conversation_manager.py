@@ -12,7 +12,6 @@ Only files in backend/chatbot/ are owned here; routes live in api.py.
 
 from __future__ import annotations
 
-from ai.agents import run_turn
 from chatbot import context_manager as context
 from chatbot import memory_manager as memory
 from chatbot import session_manager as sessions
@@ -24,7 +23,14 @@ from rag.schemas import ChatRequest, ChatResponse
 
 
 def handle_message(request: ChatRequest, user: dict) -> ChatResponse:
-    """End-to-end chat pipeline used by both /chat and /chatbot."""
+    """End-to-end chat pipeline used by both /chat and /chatbot.
+
+    Sync (not async) so Flask routes and eval harnesses can call it directly.
+    Signature and ChatResponse shape are frozen for Vidhi/Naman.
+    """
+    # Lazy: avoids cycle agents → context_manager → chatbot → conversation_manager → agents
+    from ai.agents import run_turn
+
     with Trace("chat", user_id=user["id"]) as trace:
         session = sessions.resolve_session(request.session_id, user["id"], request.message)
 

@@ -1,0 +1,17 @@
+{
+  "external_id": "INC0000009",
+  "source": "synthetic",
+  "title": "payments-api: disk pressure on data volume",
+  "body": "Summary\npayments-api \u2014 disk pressure on data volume\nDescription\nSeeing ECONNRESET on payments-api in prod. disk pressure on data volume.\nEnvironment\nprod\nLogs\n[INC0000009] ECONNRESET stack near handler; correlation 8837462910",
+  "application": "payments-api",
+  "environment": "prod",
+  "channel": "synthetic",
+  "team": "ops",
+  "category": "availability",
+  "severity": "S1",
+  "resolved": false,
+  "resolution_minutes": null,
+  "true_category": "availability",
+  "true_severity": "S1",
+  "true_team": "ops"
+}

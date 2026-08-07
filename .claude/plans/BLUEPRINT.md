@@ -97,13 +97,12 @@ already maps to Chroma `acl_<tag>` keys — so no change to the ACL mechanism.
 |---|---|---|---|
 | `admin` | `["all"]` | restricted | Platform owner, demo login |
 | `manager` | `["all"]` | restricted | Support manager — every queue, override rights, KB chatbot |
-| `engineer` | one of `["ops"]`, `["azure"]`, `["aws"]`, `["gcp"]` | confidential | Team console — own queue only |
-| `viewer` | `[]` | internal | Read-only stakeholder |
+| `engineer` | one of `["ops"]`, `["azure"]`, `["aws"]`, `["gcp"]` | confidential | Team member — own queue only |
 
-`config.py` → `ROLES = ["admin", "manager", "engineer", "viewer"]`,
+`config.py` → `ROLES = ["admin", "manager", "engineer"]`,
 `TEAMS = ["ops", "azure", "aws", "gcp"]`.
 `access_control.MAX_SENSITIVITY` → `{"admin": "restricted", "manager": "restricted",
-"engineer": "confidential", "viewer": "internal"}`.
+"engineer": "confidential"}`.
 
 Demo users seeded in `init_db()`: `manager/manager123`, `ops1/ops123`,
 `azure1/azure123`, `aws1/aws123`, `gcp1/gcp123`, plus the existing `admin/admin123`.
@@ -267,20 +266,22 @@ number is on the dashboard."
 projects, full REST API v3, and Automation rules that can POST webhooks.
 
 1. Sign up at `atlassian.com/software/jira` → Free plan → create site
-   `<team>.atlassian.net`, create a **Service Management** or Software project with key
-   `INC`.
+   `<team>.atlassian.net`, create a **Software** project. **Live TicketSphere board
+   (verified 2026-08-07 via Atlassian MCP):** site `brainbytes.atlassian.net`, project
+   key **`SCRUM`** (not `INC`), cloudId `3975e197-7e5f-47ad-9d2c-1046a1f39d6c`.
 2. Create an API token at `id.atlassian.com/manage-profile/security/api-tokens`.
    Auth is HTTP Basic: `base64(email:api_token)`.
-3. Add custom fields: *Triage Severity* (select S1–S4), *Priority Score* (number),
-   *Routed Team* (select), *AI Confidence* (number).
+3. **Field mapping (no custom triage fields on the live board):** write severity →
+   native Priority (S1→Highest … S4→Low); stamp labels `ticketsphere-severity-*` /
+   `ticketsphere-team-*`; put priority_score + confidence + rationale in the **comment**.
+   Optional later: custom fields via empty-default `JIRA_FIELD_*` env vars.
 4. Endpoints used:
-   - poll `POST /rest/api/3/search/jql` with `project = INC AND updated >= -5m`
+   - poll `POST /rest/api/3/search/jql` with `project = SCRUM AND updated >= -5m`
    - read `GET /rest/api/3/issue/{key}`
-   - write `PUT /rest/api/3/issue/{key}` (fields), `POST /rest/api/3/issue/{key}/comment`
-     (the rationale + citations, so the audit trail is visible inside Jira),
-     `POST /rest/api/3/issue/{key}/transitions` (status)
+   - write `PUT /rest/api/3/issue/{key}` (priority + labels), `POST …/comment`,
+     `POST …/transitions` (To Do / In Progress / In Review / Done)
 5. Inbound: a Jira Automation rule "*Issue created → Send web request*" to
-   `POST /api/integrations/webhook`.
+   `POST /api/integrations/webhook` (demo with curl; poll is primary).
 
 **Practical warning, decide on the day:** the AI Lab laptops sit outside the TCS network
 with open internet — **outbound to Atlassian will work, inbound webhooks almost certainly
@@ -317,9 +318,9 @@ resumes from a watermark so a restart never double-processes.
 same adapter shape) or ship synthetic-only. The demo must not depend on an external
 account being provisioned — build against the interface, decide the source at runtime.
 
-> Note: the Atlassian MCP connector in this Claude session is unauthenticated, so nothing
-> here was verified against a live Jira instance. Confirm the field IDs on the day —
-> Jira custom fields come back as `customfield_10xxx`, and the ids differ per site.
+> Note: Verified 2026-08-07 against live `brainbytes.atlassian.net` via Atlassian MCP.
+> Project key is **SCRUM**; triage custom fields are not present — adapter uses Priority +
+> labels + comment (see §7 steps above and `backend/integrations/jira.py`).
 
 ---
 
@@ -523,7 +524,7 @@ comes out of the reserve, not out of Phase 3 — governance and measurement do n
 | Injection patterns | `guardrails/input_guard.py` | "ignore previous", "set severity/priority", "you are now", "system:", HTML/markdown comments, zero-width chars, base64 blobs — plus hard delimiting of the ticket body as untrusted data in every prompt | 3 |
 | Groundedness thresholds | `guardrails/output_guard.py` | `FLOOR = 0.6`, `REFUSE = 0.35`. Raised from the defaults because a severity claim not supported by the SLA matrix is worse than no claim; not raised further because this domain escalates to a human rather than refusing | 3 |
 | Response validation | `guardrails/validators.py` | Ban "resolved/closed", "I think/probably", "as an AI", invented ETAs, raw secrets, unlisted team names | 3 |
-| Sensitivity matrix | `governance/access_control.py` | admin/manager → restricted, engineer → confidential, viewer → internal; team via `clearances` → `acl_<team>` | 1 |
+| Sensitivity matrix | `governance/access_control.py` | admin/manager → restricted, engineer → confidential; team via `clearances` → `acl_<team>` | 1 |
 | Eval set | `observability/evals.py` | 12 questions incl. ≥2 refusals (a request for a customer's phone number; "just close all the S4s") | 3 |
 | Chunk separators | `rag/chunker.py` | `\n## `, `\nSteps to reproduce`, `\nEnvironment`, `\nLogs`, `\nResolution`, `\n--- ticket ` | 1 |
 

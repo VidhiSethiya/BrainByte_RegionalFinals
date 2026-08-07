@@ -82,14 +82,17 @@ class JiraSource(TicketSource):
     def _request(self, method: str, path: str, **kwargs) -> httpx.Response:
         last_exc: Exception | None = None
         for attempt in range(MAX_RETRIES):
+            wait = BACKOFF_BASE_SECONDS * (2**attempt)
             try:
                 resp = self._client.request(method, path, **kwargs)
+                if resp.status_code == 429:
+                    wait = self._retry_after_seconds(resp, attempt)
+                    raise JiraError(f"{method} {path} -> 429 rate limited")
                 if resp.status_code >= 500:
                     raise JiraError(f"{method} {path} -> {resp.status_code}: {resp.text[:200]}")
                 return resp
-            except Exception as exc:  # noqa: BLE001 - any transport/5xx failure retries
+            except Exception as exc:  # noqa: BLE001 - any transport/429/5xx failure retries
                 last_exc = exc
-                wait = BACKOFF_BASE_SECONDS * (2**attempt)
                 log.warning(
                     "Jira %s %s failed (attempt %d/%d): %s — retrying in %.1fs",
                     method, path, attempt + 1, MAX_RETRIES, exc, wait,
@@ -97,6 +100,17 @@ class JiraSource(TicketSource):
                 if attempt < MAX_RETRIES - 1:
                     time.sleep(wait)
         raise JiraError(f"{method} {path} failed after {MAX_RETRIES} attempts: {last_exc}")
+
+    @staticmethod
+    def _retry_after_seconds(resp: httpx.Response, attempt: int) -> float:
+        """Honor Retry-After (seconds) when present; else exponential backoff."""
+        header = (resp.headers.get("Retry-After") or "").strip()
+        if header:
+            try:
+                return max(0.0, float(header))
+            except ValueError:
+                pass
+        return BACKOFF_BASE_SECONDS * (2**attempt)
 
     # --- fetch -------------------------------------------------------------------
 

@@ -1,0 +1,17 @@
+{
+  "external_id": "INC0000002",
+  "source": "synthetic",
+  "title": "func-billing: auth tokens rejected after rotate",
+  "body": "Summary\nfunc-billing \u2014 auth tokens rejected after rotate\nDescription\nSeeing KB5034441 on func-billing in prod. auth tokens rejected after rotate.\nEnvironment\nprod\nLogs\n[INC0000002] KB5034441 stack near handler; correlation 8837462910",
+  "application": "func-billing",
+  "environment": "prod",
+  "channel": "synthetic",
+  "team": "azure",
+  "category": "performance",
+  "severity": "S2",
+  "resolved": false,
+  "resolution_minutes": null,
+  "true_category": "performance",
+  "true_severity": "S2",
+  "true_team": "azure"
+}
