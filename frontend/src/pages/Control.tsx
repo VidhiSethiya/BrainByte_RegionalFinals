@@ -49,6 +49,7 @@ import {
   CHART_HEIGHT,
   GRID,
   SERIES,
+  animationFor,
   axisProps,
   legendProps,
   tooltipProps,
@@ -78,7 +79,7 @@ function ChartCard({
   children: React.ReactElement;
 }) {
   return (
-    <Card size="small" title={title}>
+    <Card size="small" title={title} className="chart-card">
       {loading ? (
         <Skeleton active paragraph={{ rows: 5 }} />
       ) : empty ? (
@@ -151,6 +152,12 @@ export default function Control() {
   const loading = analytics.isPending;
   const countFor = (severity: Severity) =>
     data?.by_severity.find((entry) => entry.severity === severity)?.count;
+
+  // The only tile with a real history behind it: `over_time` carries triaged and
+  // overridden per day, so the override-rate sparkline is measured, not invented.
+  const overrideTrend = (data?.over_time ?? [])
+    .filter((day) => day.triaged > 0)
+    .map((day) => (day.overridden / day.triaged) * 100);
 
   const teamSeries = (data?.by_team ?? []).map((entry) => ({
     team: TEAM_LABEL[entry.team],
@@ -242,6 +249,7 @@ export default function Control() {
             value={data ? (data.override_rate * 100).toFixed(1) : null}
             suffix="%"
             tone={data && data.override_rate > 0.2 ? "warning" : "default"}
+            trend={overrideTrend}
             loading={loading}
             hint="How often a human corrected the system"
           />
@@ -288,7 +296,7 @@ export default function Control() {
               <YAxis allowDecimals={false} {...axisProps} />
               <ReTooltip {...tooltipProps} />
               <Legend {...legendProps} />
-              <Bar dataKey="count" name="open" fill={SERIES[0]} radius={[4, 4, 0, 0]} />
+              <Bar dataKey="count" name="open" fill={SERIES[0]} radius={[4, 4, 0, 0]} {...animationFor(0)} />
             </BarChart>
           </ChartCard>
         </Col>
@@ -301,8 +309,8 @@ export default function Control() {
               <YAxis allowDecimals={false} {...axisProps} />
               <ReTooltip {...tooltipProps} />
               <Legend {...legendProps} />
-              <Bar dataKey="open" name="open" fill={SERIES[0]} radius={[4, 4, 0, 0]} />
-              <Bar dataKey="capacity" name="capacity" fill={SERIES[1]} radius={[4, 4, 0, 0]} />
+              <Bar dataKey="open" name="open" fill={SERIES[0]} radius={[4, 4, 0, 0]} {...animationFor(0)} />
+              <Bar dataKey="capacity" name="capacity" fill={SERIES[1]} radius={[4, 4, 0, 0]} {...animationFor(1)} />
             </BarChart>
           </ChartCard>
         </Col>
@@ -315,8 +323,22 @@ export default function Control() {
               <YAxis allowDecimals={false} {...axisProps} />
               <ReTooltip {...tooltipProps} />
               <Legend {...legendProps} />
-              <Line dataKey="triaged" name="triaged" stroke={SERIES[0]} dot={false} strokeWidth={2} />
-              <Line dataKey="overridden" name="overridden" stroke={SERIES[2]} dot={false} strokeWidth={2} />
+              <Line
+                dataKey="triaged"
+                name="triaged"
+                stroke={SERIES[0]}
+                dot={false}
+                strokeWidth={2}
+                {...animationFor(0)}
+              />
+              <Line
+                dataKey="overridden"
+                name="overridden"
+                stroke={SERIES[2]}
+                dot={false}
+                strokeWidth={2}
+                {...animationFor(1)}
+              />
             </LineChart>
           </ChartCard>
         </Col>
@@ -329,7 +351,7 @@ export default function Control() {
               <YAxis type="category" dataKey="category" width={110} {...axisProps} />
               <ReTooltip {...tooltipProps} />
               <Legend {...legendProps} />
-              <Bar dataKey="count" name="tickets" fill={SERIES[3]} radius={[0, 4, 4, 0]} />
+              <Bar dataKey="count" name="tickets" fill={SERIES[3]} radius={[0, 4, 4, 0]} {...animationFor(0)} />
             </BarChart>
           </ChartCard>
         </Col>
