@@ -2,8 +2,10 @@
 
 One page, PPT-ready. Each step is one slide's worth of content.
 
-**Product:** [PLACEHOLDER: PRODUCT_NAME] — [PLACEHOLDER: ONE_LINE_VALUE_PROP]
-**Domain:** [DOMAIN] · **Users:** [PLACEHOLDER: USER_PERSONAS]
+**Product:** TicketSphere — An enterprise AI ticket intelligence platform
+**Domain:** Application maintenance / IT service management ·
+**Users:** platform engineers working a team queue (Ops / Azure / AWS / GCP), and support
+managers overseeing all four, approving escalations and querying ticket history
 
 ---
 
@@ -265,8 +267,17 @@ answer.
 5. **Runs fully offline** — local Ollama, no vendor dependency, no data leaving the box
 6. **Every answer is auditable** — hash-chained log, per-stage traces, page-level citations
 
-[PLACEHOLDER: DOMAIN_DIFFERENTIATORS — the 2-3 domain-specific capabilities added on
-build day]
+**What TicketSphere adds on top of that platform**
+
+7. **Ten-node triage graph with a corrective loop** — normalise → enrich → grade →
+   classify → assess → route → reflect → verify → gate → sync. Handoffs are validated
+   typed objects, never prose, and both retry loops are capped at one so no unbounded
+   loop is reachable.
+8. **The LLM never counts** — aggregate questions ("how many S1 this week") are answered
+   by a deterministic SQL tool and only narrated by the model
+9. **Nothing acts without a human** — S1 and low-confidence decisions are gated for
+   approval, the only write tool refuses unapproved decisions, and the system recommends
+   a first action but never executes one
 
 ---
 

@@ -1,13 +1,16 @@
-# Project Plan
+# TicketSphere — Project Plan
+
+**TicketSphere** — *An enterprise AI ticket intelligence platform*
 
 Cursor's execution view of the same project Claude Code builds. `CLAUDE.md` is the
-architecture contract; on build day `.claude/plans/BLUEPRINT.md` becomes the
-authoritative roadmap and the tasks below get replaced by its phases.
+architecture contract; `.claude/plans/BLUEPRINT.md` is now the **authoritative roadmap**
+and its phases supersede the generic tasks below. Frontend work is specified separately in
+`frontend/FRONTEND_SPEC.md` and owned by Trapti in Windsurf — do not duplicate it here.
 
 ## Architecture summary
 
-Enterprise multimodal RAG + agentic platform. Pre-built skeleton; domain logic is
-filled in from a problem statement on build day.
+Enterprise multimodal RAG + agentic platform, applied to application-maintenance ticket
+triage: ingest → classify → prioritise → route → human gate → sync back to Jira.
 
 ```
 Client → api.py (JWT → rate limit → validate → query params)

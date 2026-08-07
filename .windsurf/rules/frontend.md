@@ -1,10 +1,16 @@
 ---
 trigger: glob
 globs: frontend/**
-description: TriageIQ frontend rules — read the full spec before writing UI code
+description: TicketSphere frontend rules — read the full spec before writing UI code
 ---
 
-# TriageIQ frontend rules
+# TicketSphere frontend rules
+
+**Product:** TicketSphere — *An enterprise AI ticket intelligence platform*
+
+Name and tagline are final. Use them verbatim everywhere: one word, capital T, capital S
+— never "Ticketsphere", "Ticket Sphere" or "TICKETSPHERE". The tagline is the header
+strapline and the browser title, worded exactly as above.
 
 **Before writing any UI code, read `../../frontend/FRONTEND_SPEC.md`.** It has the design
 brief, the API types, the file map and a per-screen spec. `.claude/plans/BLUEPRINT.md`
@@ -33,6 +39,9 @@ still carry unthemed AntD defaults that are being replaced.
 9. **Severity and status never rely on colour alone** — always a text label.
 10. **Do not restructure.** Create only the files listed in the spec's file map. Do not
     move or rename existing pages.
+11. **The logo is an inline SVG component** (`src/components/Logo.tsx`) — never a PNG, an
+    AI-generated image, a CDN asset or an emoji, and never the TCS or any other corporate
+    identity mark. Brief and constraints: spec §9.2.1.
 
 ## Palette (reference — use tokens, not these literals)
 

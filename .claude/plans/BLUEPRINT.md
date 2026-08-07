@@ -1,4 +1,6 @@
-# TriageIQ — Implementation Blueprint
+# TicketSphere — Implementation Blueprint
+
+> **TicketSphere** — *An enterprise AI ticket intelligence platform*
 
 **Domain:** Application maintenance / IT service management (ITSM)
 **Generated:** 2026-08-07

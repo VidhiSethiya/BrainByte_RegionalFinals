@@ -1,4 +1,11 @@
-# TriageIQ — Frontend Specification
+# TicketSphere — Frontend Specification
+
+> **TicketSphere** — *An enterprise AI ticket intelligence platform*
+>
+> Name and tagline are final. Use them verbatim — same capitalisation (one word, capital
+> T, capital S), same tagline wording — in the browser title, the sider, the login cards,
+> the header and the deck. A product that spells its own name three ways on one screen
+> reads as unfinished.
 
 **Owner:** Trapti (sole frontend) · **Tooling:** Windsurf · **Window:** ~10 of the 24 hours
 **Companion doc:** `../.claude/plans/BLUEPRINT.md` (whole system) — this file is the frontend contract
@@ -64,7 +71,7 @@ a risk on a machine you cannot reinstall on demo day.
 
 ## 3. The product, in one paragraph
 
-TriageIQ takes a raw IT maintenance ticket, runs it through a multi-agent pipeline
+TicketSphere takes a raw IT maintenance ticket, runs it through a multi-agent pipeline
 (normalise → retrieve precedent → classify → assess severity → route to a team → self-check
 → guardrails → human gate → sync back to Jira) and produces a **decision** the user can
 accept, override, or trace back to the evidence it was based on. Two audiences:
@@ -323,7 +330,11 @@ Legend on, tooltip on, dots off on line charts.
 Create exactly these. **Nothing else.**
 
 ```
-frontend/src/
+frontend/
+  index.html                     EDIT — <title>TicketSphere — An enterprise AI ticket
+                                        intelligence platform</title> + favicon link
+  public/favicon.svg             NEW — the mark, §9.2.1
+src/
   index.css                      NEW — §4.4
   main.tsx                       EDIT — theme object + import "./index.css"
   App.tsx                        EDIT — new routes, role-aware redirect
@@ -334,6 +345,7 @@ frontend/src/
     ui.ts                        NEW — Zustand: filters, drawer state, selection
   components/
     ChatbotDrawer.tsx            EDIT — voice button, restyle bubbles to tokens
+    Logo.tsx                     NEW — brand mark + wordmark, §9.2.1
     DecisionDrawer.tsx           NEW — the decision card. Used by Queue AND History.
     SeverityTag.tsx              NEW — severity + status + confidence display atoms
     StatTile.tsx                 NEW — the dashboard/control stat tile
@@ -608,11 +620,12 @@ Two routes, one component, a `mode` prop. Do **not** duplicate the file.
 
 | Route | Mode | Title | Sub | Demo hint | Redirects to |
 |---|---|---|---|---|---|
-| `/login` | `team` | "TriageIQ — Team Console" | "Sign in to your team queue" | `aws1 / aws123` | `/queue` |
-| `/manager/login` | `manager` | "TriageIQ — Manager Console" | "Queue oversight, approvals and history" | `manager / manager123` | `/control` |
+| `/login` | `team` | "TicketSphere — Team Console" | "Sign in to your team queue" | `aws1 / aws123` | `/queue` |
+| `/manager/login` | `manager` | "TicketSphere — Manager Console" | "Queue oversight, approvals and history" | `manager / manager123` | `/control` |
 
-Cream page, single 380px white card centred, `#A84A4D` submit button (from the theme —
-kill the AntD blue). Team mode shows a `<Select>` of Ops/Azure/AWS/GCP above the username
+Cream page, single 380px white card centred, `<Logo size={40} />` above the title, then
+the console name, then the tagline *An enterprise AI ticket intelligence platform* as
+12px uppercase label text. `#A84A4D` submit button (from the theme — kill the AntD blue). Team mode shows a `<Select>` of Ops/Azure/AWS/GCP above the username
 **as a convenience that prefills the username** (`aws` → `aws1`); the actual authority is
 the role in the JWT, so treat the picker as UX, not access control. A small text link
 switches between the two consoles.
@@ -626,9 +639,21 @@ no AntD blue anywhere on the page.
 
 ### 9.2 `AppLayout.tsx` — shell
 
-Sider `#F5F4F0`, header white (glass optional, §4.5), content cream. Product name
-**TriageIQ** replaces the `[PLACEHOLDER: PRODUCT_NAME]`; tagline replaces the other
-placeholder: *"Multi-agent ticket triage — classified, prioritised, routed, and auditable."*
+Sider `#F5F4F0`, header white (glass optional, §4.5), content cream.
+
+Three placeholders die here:
+
+| Where | Placeholder | Becomes |
+|---|---|---|
+| `frontend/index.html` `<title>` | `[PLACEHOLDER: PRODUCT_NAME]` | `TicketSphere — An enterprise AI ticket intelligence platform` |
+| `AppLayout.tsx` sider | `[PLACEHOLDER: PRODUCT_NAME]` | `<Logo />` + **TicketSphere** wordmark (§9.2.1) |
+| `AppLayout.tsx` header | `[PLACEHOLDER: TAGLINE]` | *An enterprise AI ticket intelligence platform* |
+
+Sider brand block: logo mark at 28px, wordmark **TicketSphere** in `--font-heading` at
+15px/600, 16px padding, sitting on `#F5F4F0`. When the sider collapses at the `lg`
+breakpoint (already configured, `collapsedWidth="60"`) the wordmark drops and the mark
+alone stays centred. Header tagline is 14px text-secondary and hides below 992px — it is
+context, not content.
 
 Nav, filtered by role:
 
@@ -648,6 +673,68 @@ Header keeps the existing `/api/health` badges (provider · model, retrieval mod
 count) — **restyle them to semantic tags, they are currently AntD blue/green/purple** — and
 adds the live cost/latency ticker: `last answer 2.4s · 1,840 tok · $0.0031`, all
 `tabular-nums`. Right side: username + role tag + Sign out.
+
+### 9.2.1 Logo — brief for Windsurf
+
+**Deliverable:** `frontend/src/components/Logo.tsx` — an **inline SVG React component**,
+plus `frontend/public/favicon.svg` referenced from `index.html`.
+
+```tsx
+export default function Logo({ size = 28, variant = "mark" }: {
+  size?: number;
+  variant?: "mark" | "full";   // "full" = mark + TicketSphere wordmark
+}) { … }
+```
+
+**Inline SVG, not an image file.** It scales to any size without a second asset, takes
+colour from props or `currentColor`, adds zero network requests, and cannot 404 during the
+demo. Do not generate a PNG, do not use an AI image generator, do not pull from a CDN —
+the Artifact/CSP rules and the offline-demo requirement both forbid it.
+
+**Concept.** *TicketSphere* = one sphere, many teams, tickets converging to a decision.
+Build three candidates, put them side by side on a scratch route, pick one, delete the
+other two. Directions, in the order I'd try them:
+
+1. **Segmented sphere** *(recommended)* — a circle built from four arcs with small gaps
+   between them, one arc per team (Ops / Azure / AWS / GCP). Reads as a sphere, as
+   coverage, and as four groups sharing one system. Monochrome-safe by construction.
+2. **Converging rings** — two concentric rings with a single filled node on the outer ring
+   and a short line drawing it inward to a centre dot. Triage as convergence: many inputs,
+   one decision.
+3. **Ticket-stub sphere** — a circle whose left edge carries the perforated notch of a
+   ticket stub. Most literal, most likely to look novelty at 16px. Try it last.
+
+**Constraints — these are the brief, not suggestions:**
+
+- `viewBox="0 0 24 24"`, stroke-based, `fill="none"`, `stroke-width={2}`,
+  `strokeLinecap="round"`. Geometric, drawn on a grid, no organic curves.
+- **Must read at 16px** (favicon) and at 28px (sider) and at 40px (login card). Test all
+  three before choosing — a mark that only works large is not a logo.
+- **Must survive one colour.** Design it monochrome first. Colour is a second pass and
+  only from the palette: `--accent` `#C45A5E` as the single accent, `--structural-navy`
+  `#2E3B4E` for the rest. Two colours maximum.
+- No gradients, no drop shadows, no glows, no 3D, no bevel. No text or letterforms inside
+  the mark — the wordmark sits beside it, never inside it.
+- No emoji, no clip art, no stock icon lifted from a set.
+- **Never use the TCS logo, wordmark, or any corporate identity mark.** Borrowing a design
+  language is fine; borrowing an identity mark is not.
+- Nothing animated. A spinning logo is a tell.
+
+**Wordmark.** `variant="full"` renders the mark plus **TicketSphere** in `--font-heading`,
+15px, weight 600, `letter-spacing: -0.01em`, 8px gap, vertically centred on the mark.
+One word, capital T, capital S — never "Ticketsphere", "Ticket Sphere" or "TICKETSPHERE".
+
+**Accessibility.** `role="img"` with a `<title>TicketSphere</title>` child when the mark
+stands alone; `aria-hidden="true"` when it sits next to the visible wordmark, so a screen
+reader does not announce the name twice.
+
+**Used in:** sider brand block (28px), collapsed sider (28px, mark only), Login card
+(40px, above the title, both consoles), favicon (`favicon.svg`, 16px test), and the deck's
+title slide. Nowhere else — a logo repeated on every card is a watermark, not a brand.
+
+**Time box: 45 minutes.** If direction 1 is working at 20 minutes, ship it and move on.
+This is the least load-bearing task in the whole frontend build and the easiest one to
+lose two hours to.
 
 ### 9.3 `Queue.tsx` — the engineer console *(the screen that gets used)*
 
@@ -862,6 +949,7 @@ noisy hall; the fallback path is the real path.
 | F0.2 | `index.css` + import | 10m | Cream ground visible on every page |
 | F0.3 | `mocks.ts` + `VITE_USE_MOCKS` | 40m | Every screen buildable with the backend off |
 | F0.4 | Types + endpoints into `client.ts` | 30m | `npm run build` clean |
+| F1.0 | `Logo.tsx` + `favicon.svg` + `index.html` title (§9.2.1) | 45m | Mark legible at 16 / 28 / 40px and in one colour |
 | F1.1 | `SeverityTag`, `StatTile`, `chartTheme` | 40m | Imported, not duplicated |
 | F1.2 | `Login.tsx` two modes + role redirect | 45m | Five accounts land correctly |
 | F1.3 | `AppLayout` nav by role, product name, ticker | 45m | Engineer cannot see manager nav |
@@ -876,8 +964,9 @@ noisy hall; the fallback path is the real path.
 | F4.2 | `VoiceButton` | 90m | Confirm-before-write proven |
 | F4.3 | Empty / error / loading states audit | 45m | Every screen has all four |
 
-**≈ 15h single-track.** If you are tight, cut in this order: Voice (F4.2) → Reuse
-resolution (9.5) → Bulk tab (9.6 tab 2) → glass on the header. **Never cut**
+**≈ 16h single-track.** If you are tight, cut in this order: Voice (F4.2) → logo
+exploration beyond direction 1 (ship the first working mark) → Reuse resolution (9.5) →
+Bulk tab (9.6 tab 2) → glass on the header. **Never cut**
 `DecisionDrawer` quality, the blocked-state styling, or the four-states audit — those are
 what the demo is actually made of.
 
@@ -891,6 +980,9 @@ what the demo is actually made of.
 - [ ] No client-side pagination anywhere
 - [ ] Every table's numeric columns are right-aligned and `tabular`
 - [ ] Every screen has loading, empty, error and blocked states
+- [ ] "TicketSphere" spelled identically in the tab title, favicon tooltip, sider, both
+      login cards and the deck — one word, capital T, capital S
+- [ ] The logo reads at 16px in the browser tab, not just at 40px in the login card
 - [ ] `aws1` and `ops1` see different data on Queue and History
 - [ ] Engineer nav has no manager routes; typing `/control` manually still fails at the API
 - [ ] Keyboard: tab through Queue, open the drawer, accept, `Esc` — no mouse
