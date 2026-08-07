@@ -354,6 +354,25 @@ class TriageRun(Base):
         }
 
 
+class SyncState(Base):
+    """Poller watermark, one row per ticket source. Keyed on `source` (e.g.
+    "jira") rather than a single fixed row, so a future second source doesn't
+    collide with the first.
+
+    Exists because integrations/poller.py used to hold this only as an
+    in-memory module global — correct within one running process, but every
+    restart lost it and the poller re-fetched (and re-triaged, full LLM cost)
+    every ticket on the board from the beginning. One row, updated on every
+    successful poll, is all persistence this needs.
+    """
+
+    __tablename__ = "sync_state"
+
+    source = Column(String, primary_key=True)
+    watermark = Column(String, nullable=True)
+    updated_at = Column(DateTime, default=_now, onupdate=_now)
+
+
 engine = create_engine(settings.DATABASE_URL, future=True)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
 

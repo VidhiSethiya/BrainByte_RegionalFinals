@@ -26,8 +26,39 @@ from observability.telemetry import log
 _SYSTEM_USER = {"id": "system:poller", "username": "system:poller", "role": "admin", "clearances": ["all"]}
 
 _watermark: str | None = None
+_watermark_source: str | None = None  # which source _watermark was loaded/saved for
 _lock = threading.Lock()
 _stop = threading.Event()
+
+
+def _load_watermark(source_name: str) -> str | None:
+    """Read the persisted watermark for this source. None if never polled."""
+    from db.sqlite.models import SessionLocal, SyncState
+
+    try:
+        with SessionLocal() as s:
+            row = s.get(SyncState, source_name)
+            return row.watermark if row else None
+    except Exception as exc:  # noqa: BLE001 - a fresh DB with no table yet must not crash the poll
+        log.warning("poll: could not load persisted watermark for %s: %s", source_name, exc)
+        return None
+
+
+def _save_watermark(source_name: str, watermark: str | None) -> None:
+    """Upsert the watermark so a restart resumes here instead of re-fetching
+    (and re-triaging — real LLM cost) the whole board from the beginning."""
+    from db.sqlite.models import SessionLocal, SyncState
+
+    try:
+        with SessionLocal() as s:
+            row = s.get(SyncState, source_name)
+            if row is None:
+                row = SyncState(source=source_name)
+                s.add(row)
+            row.watermark = watermark
+            s.commit()
+    except Exception as exc:  # noqa: BLE001 - persistence failing must not break the poll batch
+        log.warning("poll: could not persist watermark for %s: %s", source_name, exc)
 
 
 def _dead_letter_row(raw: dict[str, Any], source_name: str, exc: BaseException) -> None:
@@ -65,13 +96,23 @@ def poll_once() -> dict[str, Any]:
     from ai.agents import ingest_and_triage
     from ai.tools import get_ticket_source
 
-    global _watermark
+    global _watermark, _watermark_source
     with _lock:
         try:
             source = get_ticket_source()
         except Exception as exc:  # noqa: BLE001 - e.g. TICKET_SOURCE=jira with no credentials
             log.error("poll: could not resolve ticket source: %s", exc)
             return {"pulled": 0, "triaged": 0, "failed": 0, "error": str(exc)}
+
+        # Load the persisted watermark on this process's first poll of this
+        # source (or if the configured source changed). Every poll after that
+        # uses the in-memory value — no DB read on the hot path — and every
+        # poll ends by writing it back, so a restart resumes correctly instead
+        # of re-fetching (and re-triaging) the whole board again.
+        if _watermark_source != source.name:
+            _watermark = _load_watermark(source.name)
+            _watermark_source = source.name
+            log.info("poll: resumed watermark for source=%s: %s", source.name, _watermark)
 
         try:
             raw_tickets = source.fetch_since(_watermark, limit=50)
@@ -100,6 +141,7 @@ def poll_once() -> dict[str, Any]:
                 latest_watermark = updated
 
         _watermark = latest_watermark or _watermark
+        _save_watermark(source.name, _watermark)
         log.info(
             "poll: source=%s pulled=%d triaged=%d failed=%d watermark=%s",
             source.name, len(raw_tickets), triaged, failed, _watermark,
@@ -139,4 +181,18 @@ def stop_background_poller() -> None:
 
 
 def get_watermark() -> str | None:
+    """Current watermark for the configured source. Lazily resumes from the
+    persisted value if this process hasn't polled yet, so a status check
+    right after boot shows the true resumed position, not a misleading
+    None."""
+    global _watermark, _watermark_source
+    if _watermark_source is None:
+        try:
+            from ai.tools import get_ticket_source
+
+            name = get_ticket_source().name
+        except Exception:  # noqa: BLE001 - e.g. no credentials configured yet
+            return _watermark
+        _watermark = _load_watermark(name)
+        _watermark_source = name
     return _watermark
