@@ -23,6 +23,7 @@ from ai.prompts import CONTEXT_RELEVANCE_PROMPT, GROUNDEDNESS_PROMPT
 from chatbot.conversation_manager import handle_message
 from config import settings
 from db.sqlite.models import EvalResult, SessionLocal
+from db.sqlite.models import Ticket as TicketRow
 from guardrails.validators import validate_json
 from observability.telemetry import log
 from rag.rag_retriever import build_context, retrieve
@@ -259,3 +260,110 @@ def _persist(scores: list[EvalScore]) -> None:
         for score in scores:
             s.add(EvalResult(**score.model_dump()))
         s.commit()
+
+
+# --- triage accuracy (BLUEPRINT.md Phase 3.7 / .claude/plans/llm.md 3.4) -----
+#
+# Classification accuracy / routing precision / severity MAE against the
+# held-out gold-labeled tickets (Ticket.held_out + true_category/true_severity/
+# true_team, populated by db/vectordb/seed_vector_db.py --generate). Separate
+# from EVAL_SET above — this scores the *triage graph*
+# (ai.agents.run_triage/ingest_and_triage), not retrieval-augmented chat.
+
+SEVERITY_ORDER = {"S1": 1, "S2": 2, "S3": 3, "S4": 4}
+
+
+def score_triage_accuracy(
+    limit: int = 100, rerun: bool = False, user: dict | None = None
+) -> dict:
+    """Score classification accuracy, routing precision and severity MAE
+    against held-out gold labels.
+
+    rerun=False (default): scores whatever category/severity/assigned_team is
+    already stored on each held-out ticket — a SQL read, zero LLM calls, safe
+    to call from a dashboard route on every page load (ai/tools.py::
+    triage_analytics() does exactly that).
+
+    rerun=True: re-triages each held-out ticket fresh through
+    ai.agents.ingest_and_triage() before scoring — the rigorous measurement,
+    but expensive (one full graph run per ticket; on local Ollama that is
+    minutes per ticket, not seconds). Only call this from an explicit "run
+    eval" action (POST /evals/run-triage), never a page-load path.
+    """
+    with SessionLocal() as s:
+        rows = (
+            s.query(TicketRow)
+            .filter(TicketRow.held_out.is_(True))
+            .filter(TicketRow.true_severity.isnot(None))
+            .order_by(TicketRow.created_at.asc())
+            .limit(limit)
+            .all()
+        )
+
+    if not rows:
+        return {
+            "cases": 0,
+            "rerun": rerun,
+            "classification_accuracy": None,
+            "routing_precision": None,
+            "severity_mae": None,
+            "confusion_matrix": [],
+            "note": (
+                "No held-out gold-labeled tickets found. Run "
+                "`python db/vectordb/seed_vector_db.py --generate` to create "
+                "the 100-ticket held-out set, then re-run this eval."
+            ),
+        }
+
+    if rerun:
+        from ai.agents import ingest_and_triage
+
+        ids = [row.id for row in rows]
+        eval_user = user or {"id": "system:eval", "role": "admin", "clearances": ["all"]}
+        for row in rows:
+            raw = {
+                "external_id": row.external_id,
+                "source": row.source,
+                "title": row.title,
+                "body": row.body_masked,
+                "application": row.application,
+                "environment": row.environment,
+                "channel": row.channel,
+            }
+            try:
+                ingest_and_triage(raw, eval_user)
+            except Exception as exc:  # noqa: BLE001 - one bad case must not kill the run
+                log.error("triage eval: re-triage failed for %s: %s", row.external_id, exc)
+        with SessionLocal() as s:
+            rows = s.query(TicketRow).filter(TicketRow.id.in_(ids)).all()
+
+    category_correct = 0
+    team_correct = 0
+    severity_errors: list[int] = []
+    confusion: dict[tuple[str, str], int] = {}
+
+    for row in rows:
+        if row.category and row.category == row.true_category:
+            category_correct += 1
+        if row.assigned_team and row.assigned_team == row.true_team:
+            team_correct += 1
+        pred_sev, gold_sev = row.severity or "?", row.true_severity or "?"
+        key = (gold_sev, pred_sev)
+        confusion[key] = confusion.get(key, 0) + 1
+        if pred_sev in SEVERITY_ORDER and gold_sev in SEVERITY_ORDER:
+            severity_errors.append(abs(SEVERITY_ORDER[pred_sev] - SEVERITY_ORDER[gold_sev]))
+
+    n = len(rows)
+    return {
+        "cases": n,
+        "rerun": rerun,
+        "classification_accuracy": round(category_correct / n, 3),
+        "routing_precision": round(team_correct / n, 3),
+        "severity_mae": round(sum(severity_errors) / len(severity_errors), 3)
+        if severity_errors
+        else None,
+        "confusion_matrix": [
+            {"actual": gold, "predicted": pred, "count": count}
+            for (gold, pred), count in sorted(confusion.items())
+        ],
+    }

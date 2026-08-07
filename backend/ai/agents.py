@@ -36,7 +36,6 @@ from ai.prompts import (
     SEVERITY_ASSESS_PROMPT,
     TRIAGE_CLASSIFY_PROMPT,
 )
-from chatbot.context_manager import build_messages
 from config import settings
 from db.sqlite.models import SessionLocal
 from db.sqlite.models import Ticket as TicketRow
@@ -131,6 +130,14 @@ def generate(state: AgentState) -> AgentState:
     chunks = state.get("chunks") or []
     if state.get("route") != "direct" and not chunks:
         return {"answer": NO_CONTEXT_ANSWER, "context": "", "groundedness": 0.0}
+
+    # Deferred, not top-level: chatbot/__init__.py re-exports handle_message from
+    # chatbot.conversation_manager, which imports `run_turn` from this module —
+    # a real cycle if resolved at *module* load time. Delaying it to *call* time
+    # means ai.agents has already finished loading by the time this runs, same
+    # fix either side of the cycle could apply; this side doesn't require
+    # touching chatbot/__init__.py.
+    from chatbot.context_manager import build_messages
 
     messages, context = build_messages(
         state["question"],
@@ -914,11 +921,17 @@ def ingest_and_triage(raw_ticket: dict, user: dict) -> tuple[TicketRow, TriageSt
                     application=str(raw_ticket.get("application") or ""),
                     environment=str(raw_ticket.get("environment") or "prod"),
                     channel=str(raw_ticket.get("channel") or ""),
+                    reporter=str(raw_ticket.get("reporter") or ""),
+                    assignee=str(raw_ticket.get("assignee") or ""),
                     status="new",
                 )
                 s.add(row)
             else:
                 row.title = str(raw_ticket.get("title") or row.title)
+                # A ticket re-fetched from the poller may have picked up a new
+                # assignee since the last cycle; reporter never changes post-hoc.
+                if raw_ticket.get("assignee"):
+                    row.assignee = str(raw_ticket["assignee"])
             s.commit()
             s.refresh(row)
             row_id = row.id
