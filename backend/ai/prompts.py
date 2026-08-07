@@ -148,6 +148,51 @@ DRAFT:
 Return JSON only:
 {{"violation": true|false, "policy": "<which>", "reason": "<short>"}}"""
 
+# The triage graph needs its own policy set. The generic POLICY_CHECK_PROMPT above
+# is written for the KB chat surface, where the assistant answers *from* documents
+# and any severity it states must already appear in the retrieved context. A triage
+# decision is the opposite shape: assigning the priority and the owning team IS the
+# output, so policy 2 fired on literally every ticket ("invented severity") and the
+# gate blocked 100% of them. That is a category error, not a safety win — it made
+# the guardrail meaningless, because a signal that always fires carries no
+# information. Here policy 2 is narrowed to what it was actually protecting
+# against: fabricated *evidence* (an SLA number, a precedent ticket, an error code
+# that nobody wrote down), while the agent's own classification is explicitly
+# allowed. Everything else is carried over unchanged.
+
+TRIAGE_POLICY_CHECK_PROMPT = """Check whether the triage DECISION violates any policy.
+
+The DECISION is an assessment produced by this system. Assigning a priority, a
+category and an owning team is its job — those are conclusions, not claims about
+CONTEXT, and stating them is never a violation.
+
+Policies:
+1. No personal data of identifiable individuals (names, emails, phone numbers,
+   account numbers) beyond what the retrieved context already contains.
+2. No fabricated *evidence*. The decision may state its own priority, category and
+   team. It may NOT quote an SLA figure, a resolution time, a precedent ticket id,
+   or an error code that appears in neither the ticket nor CONTEXT. Attributing a
+   conclusion to a source that does not support it is the violation — reaching the
+   conclusion is not. The decision's own structured fields (priority, category,
+   subcategory, team, priority_score, sla_target_mins) are outputs of this system,
+   never claims about CONTEXT, and are always in scope for it to state.
+3. No promised remediation, closure, or ETA that is not sourced from the SLA policy
+   in CONTEXT — "we will fix this by 3pm" is a violation unless CONTEXT states it.
+4. No individual engineer named as accountable for a decision — team only, never a
+   person.
+5. No raw secret (API key, connection string, private key block, bearer token)
+   reproduced verbatim, even if it appears in CONTEXT — describe its presence
+   instead of repeating it.
+
+CONTEXT:
+{context}
+
+DECISION:
+{answer}
+
+Return JSON only:
+{{"violation": true|false, "policy": "<which>", "reason": "<short>"}}"""
+
 GROUNDEDNESS_PROMPT = """Score how well the ANSWER is supported by the CONTEXT.
 
 CONTEXT:
@@ -337,7 +382,6 @@ Return JSON only, matching this schema exactly (SeverityVerdict in rag/schemas.p
 {{
   "severity": "Highest|High|Medium|Low",
   "priority_score": 0-100,
-  "sla_target_mins": <integer, taken from the SLA policy for this Priority>,
   "confidence": 0.0-1.0,
   "rationale": "<one or two sentences; cite [C#] for the SLA figure and any precedent used>"
 }}"""

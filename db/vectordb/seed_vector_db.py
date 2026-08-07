@@ -313,12 +313,18 @@ def _index_seed(directory: Path, roles: str, sensitivity: str) -> int:
             doc_roles = list(default_roles)
             doc_type = "runbook"
             name = path.name.lower()
-            if "sla" in name:
-                doc_type = "sla_policy"
-            elif "escalat" in name:
-                doc_type = "escalation_matrix"
-            elif "catalog" in name or "catalogue" in name:
-                doc_type = "service_catalog"
+            # Directory wins over filename. These substring rules are a fallback
+            # for loose policy docs, and they misfire on a runbook whose *service*
+            # happens to be named for one of them — `appgw-catalog-api-runbook.md`
+            # was being indexed as doc_type=service_catalog, which both hid it from
+            # a runbook search and polluted the catalogue lookup the router uses.
+            if "runbooks" not in path.parts:
+                if "sla" in name:
+                    doc_type = "sla_policy"
+                elif "escalat" in name:
+                    doc_type = "escalation_matrix"
+                elif "catalog" in name or "catalogue" in name:
+                    doc_type = "service_catalog"
             team_tag = next((t for t in TEAMS if t in path.name.lower()), None)
             if team_tag:
                 doc_roles = list({*doc_roles, team_tag})

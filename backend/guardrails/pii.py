@@ -42,7 +42,25 @@ PATTERNS: dict[str, re.Pattern] = {
     ),
     "EMPLOYEE_ID": re.compile(r"\b(?:EMP|EID)[-_]?\d{4,8}\b", re.I),
     "CUSTOMER_ACCOUNT": re.compile(r"\b(?:CUST|ACCT)[-_]?\d{6,12}\b", re.I),
-    "HOSTNAME": re.compile(r"\b(?:ip-|ec2-|aks-|gke-)[a-z0-9.-]+\b", re.I),
+    # Cloud *node* hostnames only. The previous form was
+    #     \b(?:ip-|ec2-|aks-|gke-)[a-z0-9.-]+\b
+    # which matched any token beginning "aks-"/"gke-" — including the service
+    # catalogue's own identifiers `aks-prod-01` and `gke-analytics`. Those were
+    # masked to [HOSTNAME_n] at index time, so 2 of 12 catalogue entries became
+    # unmatchable and no Azure AKS or GCP GKE ticket could ever retrieve its
+    # owning team. Real node names always carry a pool/vmss/instance marker, a
+    # dotted FQDN, or a long digit run; service identifiers do not. Requiring one
+    # of those keeps genuine hostnames masked without eating the routing key.
+    "HOSTNAME": re.compile(
+        r"\b(?:"
+        r"ip-\d{1,3}-\d{1,3}-\d{1,3}-\d{1,3}[a-z0-9.-]*"              # ip-10-0-1-23.ec2.internal
+        r"|ec2-[a-z0-9.-]+"                                            # ec2-* is always an instance
+        r"|(?:aks|gke)-[a-z0-9-]*(?:nodepool|node-pool|pool|vmss|instance)[a-z0-9-]*"
+        r"|(?:aks|gke)-[a-z0-9-]*\d{4,}[a-z0-9-]*"                     # long numeric / hash suffix
+        r"|(?:aks|gke)-[a-z0-9-]+\.[a-z0-9.-]+"                        # dotted FQDN
+        r")\b",
+        re.I,
+    ),
     "IP": re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b"),
     "URL": re.compile(r"https?://[^\s<>\"]+"),
 }

@@ -35,6 +35,7 @@ from ai.prompts import (
     ROUTE_DECIDE_PROMPT,
     SEVERITY_ASSESS_PROMPT,
     TRIAGE_CLASSIFY_PROMPT,
+    TRIAGE_POLICY_CHECK_PROMPT,
 )
 from chatbot.context_manager import build_messages
 from config import settings
@@ -61,6 +62,7 @@ from rag.schemas import (
     TriageDecision,
     TriageVerdict,
     normalize_severity,
+    sla_target_mins,
 )
 
 MAX_RETRIES = 1
@@ -565,7 +567,8 @@ def triage_assess(state: TriageState) -> TriageState:
     return {
         "severity": verdict.severity,
         "priority_score": verdict.priority_score,
-        "sla_target_mins": verdict.sla_target_mins,
+        # Looked up, not generated — see rag/schemas.py::SLA_TARGET_MINS.
+        "sla_target_mins": sla_target_mins(verdict.severity),
         "assess_confidence": verdict.confidence,
         "assess_rationale": verdict.rationale,
     }
@@ -715,9 +718,13 @@ def triage_verify(state: TriageState) -> TriageState:
 
     if trace is not None:
         with trace.stage("verify"):
-            result, score = check_output(rationale, context, trace)
+            result, score = check_output(
+                rationale, context, trace, policy_prompt=TRIAGE_POLICY_CHECK_PROMPT
+            )
     else:
-        result, score = check_output(rationale, context)
+        result, score = check_output(
+            rationale, context, policy_prompt=TRIAGE_POLICY_CHECK_PROMPT
+        )
 
     fired = list(state.get("guardrails_fired") or [])
     if result.findings:

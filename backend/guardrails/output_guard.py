@@ -28,8 +28,21 @@ GROUNDEDNESS_REFUSE = 0.25
 CAVEAT = "\n\n> ⚠️ Partially grounded — verify against the cited sources before acting."
 
 
-def check_output(answer: str, context: str, trace=None) -> tuple[GuardrailResult, float]:
-    """Returns (result, groundedness). result.text is the answer to actually send."""
+def check_output(
+    answer: str,
+    context: str,
+    trace=None,
+    policy_prompt: str | None = None,
+) -> tuple[GuardrailResult, float]:
+    """Returns (result, groundedness). result.text is the answer to actually send.
+
+    `policy_prompt` lets a caller supply a policy set appropriate to its output
+    shape while sharing this one mechanism — same PII scan, same groundedness
+    scorer, same audit path. The triage graph passes
+    prompts.TRIAGE_POLICY_CHECK_PROMPT because the generic set treats stating a
+    severity as an invented claim, which is exactly what a triage decision is
+    supposed to do; see that prompt's comment. Defaults to the KB-chat set.
+    """
     ok, reason = check_response_shape(answer)
     if not ok:
         return GuardrailResult(allowed=False, reason=reason, text=""), 0.0
@@ -56,7 +69,7 @@ def check_output(answer: str, context: str, trace=None) -> tuple[GuardrailResult
                 trace=trace,
             ),
             lambda: chat_json(
-                POLICY_CHECK_PROMPT.format(context=context, answer=safe_answer),
+                (policy_prompt or POLICY_CHECK_PROMPT).format(context=context, answer=safe_answer),
                 fast=True,
                 trace=trace,
             ),

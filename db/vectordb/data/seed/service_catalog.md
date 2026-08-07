@@ -12,3 +12,15 @@
 - `gke-analytics` owned by **gcp**
 - `cloudsql-reporting` owned by **gcp**
 - `pubsub-ingest` owned by **gcp**
+- `sqs-payments-settlement` owned by **aws**
+- `kinesis-clickstream` owned by **aws**
+- `kafka-payments-fraud` owned by **ops**
+- `servicebus-shipping-events` owned by **azure**
+- `cognito-orders-api` owned by **aws**
+- `entra-customer-api` owned by **azure**
+- `ldap-support-portal` owned by **ops**
+- `iap-admin-api` owned by **gcp**
+- `alb-payments-api` owned by **aws**
+- `appgw-catalog-api` owned by **azure**
+- `httpslb-recommendations-api` owned by **gcp**
+- `aurora-orders` owned by **aws**

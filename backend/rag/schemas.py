@@ -44,6 +44,25 @@ _LEGACY_SEVERITY = {
 _PRIORITY_NAMES = frozenset({"Highest", "High", "Medium", "Low"})
 
 
+#: Response/resolution targets per band, in minutes. MUST stay in step with
+#: db/vectordb/data/seed/sla_policy.md — that document is what a reviewer sees,
+#: this table is what the code applies. An SLA figure is a lookup, not a
+#: judgement: asking the model for it produced a fabricated "60 minutes" that the
+#: policy guard then (correctly) flagged as invented evidence. Same principle as
+#: ticket_stats — the LLM never supplies a number that a table can answer.
+SLA_TARGET_MINS: dict[str, dict[str, int]] = {
+    "Highest": {"respond": 15, "resolve": 240},
+    "High": {"respond": 30, "resolve": 480},
+    "Medium": {"respond": 120, "resolve": 1440},
+    "Low": {"respond": 480, "resolve": 4320},
+}
+
+
+def sla_target_mins(priority: str | None, kind: str = "resolve") -> int:
+    """Resolution (default) or response target for a band. 0 when unset."""
+    return SLA_TARGET_MINS.get(normalize_severity(priority), {}).get(kind, 0)
+
+
 def normalize_severity(value: str | None) -> str:
     """Map legacy S1–S4 / P1–P4 (and case variants) onto Jira Priority names."""
     if not value:
