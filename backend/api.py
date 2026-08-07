@@ -771,11 +771,15 @@ def integrations_webhook():
 
 @api_bp.get("/analytics/triage")
 @require_auth
+@require_role("admin", "manager")
 def analytics_triage():
     """Backs the Control Tower dashboard entirely — frontend/FRONTEND_SPEC.md
     §6.1's TriageAnalytics shape, matched field-for-field. Every number is a SQL
     aggregate or a stored-vs-gold-label comparison; see
-    ai/tools.py::triage_analytics()."""
+    ai/tools.py::triage_analytics(). Manager/admin only, matching Control Tower's
+    own nav scoping (frontend/FRONTEND_SPEC.md §9.2) — an engineer has no
+    legitimate reason to pull cross-team aggregates, same rule as
+    ai/tools.py::ticket_stats()."""
     return ok(tools.triage_analytics(g.user))
 
 
@@ -852,194 +856,6 @@ def analytics_usage():
             "feedback_negative": s.query(Feedback).filter_by(rating=-1).count(),
         }
     return ok({**usage_summary(), **totals})
-
-
-@api_bp.get("/analytics/triage")
-@require_auth
-@require_role("admin", "manager")
-def analytics_triage():
-    """Manager control-tower aggregates from SQLite only — no LLM, no page-summing
-    in the browser. Shape matches frontend TriageAnalytics (client.ts)."""
-    now = dt.datetime.utcnow()
-    open_statuses_excluded = ("resolved", "synced")
-    severities = ("S1", "S2", "S3", "S4")
-    severity_rank = {s: i for i, s in enumerate(severities)}
-    team_capacity = 8  # demo placeholder; real capacity would come from staffing config
-
-    with SessionLocal() as s:
-        tickets = s.query(Ticket).all()
-        runs = s.query(TriageRun).all()
-
-    open_tickets = [t for t in tickets if t.status not in open_statuses_excluded]
-
-    by_severity = [
-        {
-            "severity": sev,
-            "count": sum(1 for t in open_tickets if t.severity == sev),
-        }
-        for sev in severities
-    ]
-
-    by_team = []
-    for team in settings.TEAMS:
-        team_open = [t for t in open_tickets if t.assigned_team == team]
-        oldest = 0
-        for t in team_open:
-            if t.created_at:
-                oldest = max(oldest, int((now - t.created_at).total_seconds() / 60))
-        by_team.append(
-            {
-                "team": team,
-                "open": len(team_open),
-                "capacity": team_capacity,
-                "oldest_age_mins": oldest,
-            }
-        )
-
-    # Last 14 calendar days of triage runs + overrides (by ticket.updated_at).
-    day_keys = [
-        (now.date() - dt.timedelta(days=offset)).isoformat()
-        for offset in range(13, -1, -1)
-    ]
-    triaged_by_day: dict[str, int] = {d: 0 for d in day_keys}
-    overridden_by_day: dict[str, int] = {d: 0 for d in day_keys}
-    for run in runs:
-        if run.created_at:
-            key = run.created_at.date().isoformat()
-            if key in triaged_by_day:
-                triaged_by_day[key] += 1
-    for t in tickets:
-        if t.overridden_by and t.updated_at:
-            key = t.updated_at.date().isoformat()
-            if key in overridden_by_day:
-                overridden_by_day[key] += 1
-    over_time = [
-        {
-            "date": d,
-            "triaged": triaged_by_day[d],
-            "overridden": overridden_by_day[d],
-        }
-        for d in day_keys
-    ]
-
-    category_counts: dict[str, int] = {}
-    for t in tickets:
-        if t.category:
-            category_counts[t.category] = category_counts.get(t.category, 0) + 1
-    by_category = [
-        {"category": cat, "count": n}
-        for cat, n in sorted(category_counts.items(), key=lambda kv: (-kv[1], kv[0]))
-    ]
-
-    # Held-out gold labels → accuracy / MAE / confusion (0 when none labelled).
-    labelled = [
-        t
-        for t in tickets
-        if t.held_out and t.true_severity and t.severity and t.true_team and t.assigned_team
-    ]
-    classification_accuracy = 0.0
-    routing_precision = 0.0
-    severity_mae = 0.0
-    confusion: dict[tuple[str, str], int] = {}
-    if labelled:
-        with_cat = [t for t in labelled if t.true_category]
-        if with_cat:
-            classification_accuracy = sum(
-                1 for t in with_cat if t.category == t.true_category
-            ) / len(with_cat)
-        else:
-            classification_accuracy = sum(
-                1 for t in labelled if t.severity == t.true_severity
-            ) / len(labelled)
-        routing_precision = sum(
-            1 for t in labelled if t.assigned_team == t.true_team
-        ) / len(labelled)
-        mae_vals = []
-        for t in labelled:
-            if t.severity in severity_rank and t.true_severity in severity_rank:
-                mae_vals.append(abs(severity_rank[t.severity] - severity_rank[t.true_severity]))
-                confusion[(t.severity, t.true_severity)] = (
-                    confusion.get((t.severity, t.true_severity), 0) + 1
-                )
-        severity_mae = (sum(mae_vals) / len(mae_vals)) if mae_vals else 0.0
-
-    severity_confusion = [
-        {"predicted": pred, "actual": actual, "count": confusion.get((pred, actual), 0)}
-        for actual in severities
-        for pred in severities
-    ]
-
-    overridden = [t for t in tickets if t.overridden_by]
-    decided = [t for t in tickets if t.status not in ("new",)]
-    override_rate = (len(overridden) / len(decided)) if decided else 0.0
-
-    avg_cost_usd = (sum(r.cost_usd or 0.0 for r in runs) / len(runs)) if runs else 0.0
-    avg_latency_ms = (
-        int(sum(r.latency_ms or 0 for r in runs) / len(runs)) if runs else 0
-    )
-
-    today = now.date()
-    tokens_today = sum(
-        (r.tokens or 0)
-        for r in runs
-        if r.created_at and r.created_at.date() == today
-    )
-
-    sla_at_risk = sum(
-        1
-        for t in open_tickets
-        if t.severity == "S1"
-    )
-    awaiting_approval = sum(1 for t in tickets if t.status == "awaiting_approval")
-
-    # Resolve usernames for recent overrides (best-effort).
-    user_ids = {t.overridden_by for t in overridden if t.overridden_by}
-    usernames: dict[str, str] = {}
-    if user_ids:
-        with SessionLocal() as s:
-            for u in s.query(User).filter(User.id.in_(user_ids)).all():
-                usernames[u.id] = u.username
-
-    recent_overrides = []
-    for t in sorted(
-        overridden,
-        key=lambda row: row.updated_at or row.created_at or now,
-        reverse=True,
-    )[:20]:
-        # override_reason is free text; field/from/to are not stored — surface reason.
-        recent_overrides.append(
-            {
-                "ticket_id": t.id,
-                "external_id": t.external_id,
-                "title": t.title,
-                "field": "decision",
-                "from": "",
-                "to": t.severity or t.assigned_team or "",
-                "by": usernames.get(t.overridden_by or "", t.overridden_by or "unknown"),
-                "reason": t.override_reason or "",
-                "at": (t.updated_at or t.created_at or now).isoformat(),
-            }
-        )
-
-    return ok(
-        {
-            "by_severity": by_severity,
-            "by_team": by_team,
-            "over_time": over_time,
-            "classification_accuracy": round(classification_accuracy, 4),
-            "routing_precision": round(routing_precision, 4),
-            "severity_mae": round(severity_mae, 4),
-            "override_rate": round(override_rate, 4),
-            "avg_cost_usd": round(avg_cost_usd, 6),
-            "avg_latency_ms": avg_latency_ms,
-            "sla_at_risk": sla_at_risk,
-            "awaiting_approval": awaiting_approval,
-            "by_category": by_category,
-            "tokens_today": tokens_today,
-            "severity_confusion": severity_confusion,
-            "recent_overrides": recent_overrides,
-        }
-    )
 
 
 @api_bp.get("/analytics/traces")

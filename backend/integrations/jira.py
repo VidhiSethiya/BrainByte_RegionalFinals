@@ -161,12 +161,15 @@ class JiraSource(TicketSource):
     # Rather than block write-back on someone creating four custom fields, this
     # writes onto what the board already has, today, with zero admin setup:
     #   severity        -> native Priority field (S1->Highest .. S4->Low)
-    #   team/severity   -> labels (ticketsphere-team-<x>, ticketsphere-severity-<x>)
+    #   team/severity   -> labels — team as a short board code (AWS/AZR/GCP/OPS,
+    #                      matching how the rest of the org already tags issues),
+    #                      severity as ticketsphere-severity-<x>
     #   everything      -> the rationale comment (see add_comment / approve route)
     # JIRA_FIELD_* stay honoured *additionally* if a team later adds real custom
     # fields — set is set, but nothing here depends on them existing.
 
     _SEVERITY_TO_PRIORITY_ID = {"S1": "1", "S2": "2", "S3": "3", "S4": "4"}  # id "5"=Lowest unused
+    _TEAM_TO_LABEL = {"aws": "AWS", "azure": "AZR", "gcp": "GCP", "ops": "OPS"}
 
     def update(self, external_id: str, fields: dict[str, Any]) -> None:
         set_fields: dict[str, Any] = {}
@@ -179,8 +182,9 @@ class JiraSource(TicketSource):
                 set_fields["priority"] = {"id": priority_id}
             label_adds.append(f"ticketsphere-severity-{severity}")
 
-        if fields.get("assigned_team"):
-            label_adds.append(f"ticketsphere-team-{fields['assigned_team']}")
+        team = fields.get("assigned_team")
+        if team:
+            label_adds.append(self._TEAM_TO_LABEL.get(team, team.upper()))
 
         # Optional custom fields, only written if a team has actually created them.
         if "severity" in fields and settings.JIRA_FIELD_SEVERITY:
