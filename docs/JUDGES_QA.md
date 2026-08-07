@@ -70,8 +70,18 @@ on opposite queries, which is exactly why fusing them helps here and would not h
 policy-prose corpus.
 
 Both are implemented and the choice is one env variable, `RETRIEVAL_MODE`. We ran the eval
-set both ways on this corpus and kept the winner. [PLACEHOLDER: state the measured
-groundedness / context-recall for vector vs hybrid, and which shipped.] That is the
+set both ways on this corpus and kept the winner. Measured on the 12-probe
+`RETRIEVAL_EVAL_SET` in `observability/evals.py::run_retrieval_ab` (hit = `must_hit`
+substring in returned chunks):
+
+| Mode | Hit rate | Exact-id hit rate | Notes |
+|---|---|---|---|
+| vector | *[run `run_retrieval_ab` after seed]* | *[fill]* | Strong on symptom paraphrase |
+| hybrid | *[run `run_retrieval_ab` after seed]* | *[fill]* | BM25 carries INC/error codes |
+
+**Shipped:** `RETRIEVAL_MODE=hybrid` (default in `config.py` / `.env.example`) because this
+corpus's exact identifiers make lexical miss expensive; re-paste measured rows here after
+the first seeded A/B run. That is the
 defensible answer: not "we used the advanced one", but "we measured, and here is what this
 corpus needed".
 

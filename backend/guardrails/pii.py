@@ -5,7 +5,10 @@ message and every outbound answer) so it must be microseconds, and a guardrail t
 can hallucinate is not a guardrail. The LLM pass in rag/anonymizer.py complements
 this at ingest time, where latency is not a concern.
 
-Masking is reversible-by-mapping (stable [EMAIL_1] tokens); redaction is not.
+Masking is reversible-by-mapping (stable [EMAIL_1] tokens) for ordinary PII;
+secrets are irreversibly replaced and never enter the token map.
+Ticket ids (INC…) and error codes (ORA-, HTTP 502, KB5…) must NOT match any pattern —
+hybrid retrieval depends on those exact tokens surviving.
 """
 
 from __future__ import annotations
@@ -14,21 +17,57 @@ import re
 from typing import Iterable
 
 # Order matters: longer/more specific patterns first so they win the overlap.
-# [PLACEHOLDER: DOMAIN_PII_PATTERNS — add the identifiers this domain actually
-#  carries, e.g. NHS number, MRN, IBAN, policy number, VIN, employee id.]
 PATTERNS: dict[str, re.Pattern] = {
+    "AWS_KEY": re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
+    "AZURE_KEY": re.compile(
+        r"(?i)(?:AccountKey|SharedAccessSignature)\s*=\s*[^\s;\"']+"
+    ),
+    "PRIVATE_KEY": re.compile(
+        r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"
+        r"[\s\S]*?"
+        r"-----END (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"
+    ),
+    "JWT": re.compile(r"\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b"),
+    "CONNECTION_STRING": re.compile(
+        r"(?i)(?:Password|Pwd|Secret|Api[_-]?Key|ConnectionString)\s*[:=]\s*[^\s;\"']+"
+    ),
     "EMAIL": re.compile(r"\b[\w.+-]+@[\w-]+\.[\w.]{2,}\b"),
     "CREDIT_CARD": re.compile(r"\b(?:\d[ -]*?){13,16}\b"),
     "SSN": re.compile(r"\b\d{3}-\d{2}-\d{4}\b"),
     "AADHAAR": re.compile(r"\b\d{4}\s?\d{4}\s?\d{4}\b"),
     "PAN": re.compile(r"\b[A-Z]{5}\d{4}[A-Z]\b"),
-    "PHONE": re.compile(r"(?<!\d)(?:\+\d{1,3}[ -]?)?(?:\d[ -]?){9,12}\d(?!\d)"),
+    # Require a separator or +country so bare 10-digit correlation ids survive.
+    "PHONE": re.compile(
+        r"(?<!\d)(?:\+\d{1,3}[\s-]?)?(?:\(?\d{2,4}\)?[\s.-]){2,}\d{2,4}(?!\d)"
+    ),
+    "EMPLOYEE_ID": re.compile(r"\b(?:EMP|EID)[-_]?\d{4,8}\b", re.I),
+    "CUSTOMER_ACCOUNT": re.compile(r"\b(?:CUST|ACCT)[-_]?\d{6,12}\b", re.I),
+    "HOSTNAME": re.compile(r"\b(?:ip-|ec2-|aks-|gke-)[a-z0-9.-]+\b", re.I),
     "IP": re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b"),
     "URL": re.compile(r"https?://[^\s<>\"]+"),
 }
 
+# Irreversible — never stored in the reverse token map.
+SECRET_TYPES = {
+    "AWS_KEY",
+    "AZURE_KEY",
+    "PRIVATE_KEY",
+    "JWT",
+    "CONNECTION_STRING",
+}
+
 # Patterns whose presence in an *answer* is a leak, regardless of ingest masking.
-LEAK_TYPES = {"EMAIL", "CREDIT_CARD", "SSN", "AADHAAR", "PAN", "PHONE"}
+LEAK_TYPES = {
+    "EMAIL",
+    "CREDIT_CARD",
+    "SSN",
+    "AADHAAR",
+    "PAN",
+    "PHONE",
+    "EMPLOYEE_ID",
+    "CUSTOMER_ACCOUNT",
+    *SECRET_TYPES,
+}
 
 
 def detect(text: str, types: Iterable[str] | None = None) -> list[dict]:
@@ -53,11 +92,11 @@ def detect(text: str, types: Iterable[str] | None = None) -> list[dict]:
 
 
 def mask_text(text: str) -> tuple[str, dict[str, str]]:
-    """Replace PII with stable typed tokens.
+    """Replace PII with stable typed tokens; secrets are irreversibly redacted.
 
-    The same value always maps to the same token within one call, so relationships in
-    the text survive ("[PERSON_1] emailed [PERSON_2] twice") and the result is still
-    useful to embed and reason over.
+    The same non-secret value always maps to the same token within one call, so
+    relationships in the text survive. Secrets get a fixed [REDACTED_*] marker and
+    are omitted from the reverse map.
     """
     findings = detect(text)
     if not findings:
@@ -65,20 +104,28 @@ def mask_text(text: str) -> tuple[str, dict[str, str]]:
 
     counters: dict[str, int] = {}
     value_to_token: dict[str, str] = {}
+    reverse: dict[str, str] = {}
     out, cursor = [], 0
 
     for finding in findings:
         value = finding["value"]
-        if value not in value_to_token:
-            counters[finding["type"]] = counters.get(finding["type"], 0) + 1
-            value_to_token[value] = f"[{finding['type']}_{counters[finding['type']]}]"
+        pii_type = finding["type"]
+        if pii_type in SECRET_TYPES:
+            token = f"[REDACTED_{pii_type}]"
+        elif value not in value_to_token:
+            counters[pii_type] = counters.get(pii_type, 0) + 1
+            token = f"[{pii_type}_{counters[pii_type]}]"
+            value_to_token[value] = token
+            reverse[token] = value
+        else:
+            token = value_to_token[value]
+
         out.append(text[cursor : finding["start"]])
-        out.append(value_to_token[value])
+        out.append(token)
         cursor = finding["end"]
 
     out.append(text[cursor:])
-    # token -> original, for authorised re-identification
-    return "".join(out), {token: value for value, token in value_to_token.items()}
+    return "".join(out), reverse
 
 
 def redact_text(text: str, char: str = "█") -> str:
