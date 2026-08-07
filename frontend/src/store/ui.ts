@@ -31,9 +31,12 @@ export interface HistoryFilters extends QueueFilters {
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
+/** Large fetch window — tables use client-side UI pagination on the loaded rows. */
+const FETCH_PAGE_SIZE = 200;
+
 const QUEUE_DEFAULTS: QueueFilters = {
   page: 1,
-  page_size: 10,
+  page_size: FETCH_PAGE_SIZE,
   sort: "priority_score",
   order: "desc",
 };
@@ -44,7 +47,7 @@ const QUEUE_DEFAULTS: QueueFilters = {
  */
 const HISTORY_DEFAULTS: HistoryFilters = {
   page: 1,
-  page_size: 10,
+  page_size: FETCH_PAGE_SIZE,
   sort: "created_at",
   order: "desc",
   state: "closed",

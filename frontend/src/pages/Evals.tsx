@@ -23,10 +23,9 @@ import {
   Tooltip,
   Typography,
 } from "antd";
-import { useState } from "react";
-
 import { api, type ListParams, type Severity } from "../api/client";
 import StatTile from "../components/StatTile";
+import { FETCH_ALL_PAGE_SIZE, uiPagination } from "../components/uiPagination";
 
 const SEVERITIES: Severity[] = ["Highest", "High", "Medium", "Low"];
 
@@ -110,7 +109,7 @@ function ConfusionMatrix({ cells }: { cells: { predicted: Severity; actual: Seve
 export default function Evals() {
   const { message: toast } = App.useApp();
   const queryClient = useQueryClient();
-  const [params, setParams] = useState<ListParams>({ page: 1, page_size: 10 });
+  const params: ListParams = { page: 1, page_size: FETCH_ALL_PAGE_SIZE };
 
   const { data, isFetching, error, refetch } = useQuery({
     queryKey: ["evals", params],
@@ -267,7 +266,7 @@ export default function Evals() {
           <Table
             rowKey="key"
             size="small"
-            pagination={false}
+            pagination={uiPagination}
             dataSource={abRows}
             scroll={{ x: true }}
             columns={[
@@ -344,19 +343,7 @@ export default function Evals() {
                 />
               ),
             }}
-            pagination={{
-              current: data?.meta.page,
-              pageSize: data?.meta.page_size,
-              total: data?.meta.total,
-              showTotal: (total, range) => (
-                <span className="tabular">
-                  {range[0]}–{range[1]} of {total}
-                </span>
-              ),
-            }}
-            onChange={(pagination) =>
-              setParams((p) => ({ ...p, page: pagination.current, page_size: pagination.pageSize }))
-            }
+            pagination={uiPagination}
             columns={[
               { title: "Question", dataIndex: "question", ellipsis: true },
               {

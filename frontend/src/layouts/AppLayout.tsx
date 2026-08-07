@@ -45,7 +45,7 @@ const NAV: NavItem[] = [
   { key: "/chat", icon: <MessageOutlined />, label: "Assistant", managerOnly: true },
   { key: "/documents", icon: <FileTextOutlined />, label: "Knowledge Base", managerOnly: true },
   { key: "/evals", icon: <ExperimentOutlined />, label: "Evaluations", managerOnly: true },
-  { key: "/dashboard", icon: <DashboardOutlined />, label: "Dashboard", managerOnly: true },
+  { key: "/dashboard", icon: <DashboardOutlined />, label: "Usage", managerOnly: true },
 ];
 
 export function isManagerRole(role?: string) {
