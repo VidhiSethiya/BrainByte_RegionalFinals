@@ -3,15 +3,18 @@
 This is the only orchestration entrypoint the API calls for chat. It owns the order
 of the pipeline; nothing here should be reimplemented in a route handler.
 
-    session -> memory -> input guard -> agent (retrieve/generate/verify)
+    session -> rewrite -> memory -> input guard -> agent (retrieve/generate/verify)
             -> persist -> suggest -> audit -> telemetry
+
+Two surfaces share this handler:
+  - /chat     multi-session — caller supplies session_id (or a new one is created)
+  - /chatbot  single-session — API pins session_id via session_manager.pinned_session
 """
 
 from __future__ import annotations
 
 from ai.agents import run_turn
-from ai.llm import chat_json
-from ai.prompts import SUGGEST_FOLLOWUPS_PROMPT
+from chatbot import context_manager as context
 from chatbot import memory_manager as memory
 from chatbot import session_manager as sessions
 from guardrails.governance import audit
@@ -22,6 +25,11 @@ from rag.schemas import ChatRequest, ChatResponse
 
 
 def handle_message(request: ChatRequest, user: dict) -> ChatResponse:
+    """End-to-end chat pipeline used by both /chat and /chatbot.
+
+    Sync (not async) so Flask routes and eval harnesses can call it directly.
+    Signature and ChatResponse shape are frozen for Vidhi/Naman.
+    """
     with Trace("chat", user_id=user["id"]) as trace:
         session = sessions.resolve_session(request.session_id, user["id"], request.message)
 
@@ -53,13 +61,18 @@ def handle_message(request: ChatRequest, user: dict) -> ChatResponse:
         question = guard.text  # PII-masked
         memory.append_message(session.id, "user", question)
 
-        # 2. memory
+        # 2. memory — summary + short-term buffer (exclude the turn just added)
         summary = memory.get_summary(session.id)
-        history = memory.recent_messages(session.id)[:-1]  # exclude the turn just added
+        history = memory.get_history(session.id)[:-1]
 
-        # 3. agent
+        # 3. rewrite follow-ups into a standalone retrieval query
+        with trace.stage("rewrite") as stage:
+            rewritten = memory.rewrite_query(question, summary, trace=trace)
+            stage.meta["rewritten"] = rewritten != question
+
+        # 4. agent (plan → retrieve → generate → verify); retrieval uses rewrite + summary
         state = run_turn(
-            question,
+            rewritten,
             user=user,
             summary=summary,
             history=history,
@@ -93,7 +106,7 @@ def handle_message(request: ChatRequest, user: dict) -> ChatResponse:
         answer = state.get("answer", "")
         citations = to_citations(state.get("chunks") or [], answer)
 
-        # 4. persist with per-turn telemetry attached
+        # 5. persist with per-turn telemetry attached
         message = memory.append_message(
             session.id,
             "assistant",
@@ -102,12 +115,17 @@ def handle_message(request: ChatRequest, user: dict) -> ChatResponse:
             groundedness=state.get("groundedness"),
             prompt_tokens=trace.prompt_tokens,
             completion_tokens=trace.completion_tokens,
+            latency_ms=trace.total_ms,
         )
         memory.maybe_summarize(session.id, trace=trace)
-        sessions.touch(session.id, title=question)
 
-        # 5. proactive suggestions from history + the answer just given
-        suggestions = _suggest(summary, answer, trace)
+        # 6. auto-title after the first exchange (multi-session only)
+        title = context.infer_title(question, answer)
+        sessions.set_title(session.id, title)
+        sessions.touch(session.id)
+
+        # 7. proactive suggestions grounded in the KB / last answer
+        suggestions = context.suggest_followups(summary, answer, trace=trace)
 
         audit.record(
             "chat.answered",
@@ -130,13 +148,3 @@ def handle_message(request: ChatRequest, user: dict) -> ChatResponse:
         total_tokens=trace.prompt_tokens + trace.completion_tokens,
         trace_id=trace.id,
     )
-
-
-def _suggest(summary: str, answer: str, trace) -> list[str]:
-    result = chat_json(
-        SUGGEST_FOLLOWUPS_PROMPT.format(summary=summary or "(none)", answer=answer[:1200]),
-        fast=True,
-        trace=trace,
-        default={},
-    )
-    return [s for s in (result or {}).get("suggestions", []) if isinstance(s, str)][:3]

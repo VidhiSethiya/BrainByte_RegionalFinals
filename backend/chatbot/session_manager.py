@@ -23,6 +23,7 @@ def create_session(user_id: str, title: str = "New conversation") -> ChatSession
         session = ChatSession(user_id=user_id, title=title[:TITLE_CHARS])
         s.add(session)
         s.commit()
+        s.refresh(session)
         audit.record("session.created", user_id=user_id, resource=session.id)
         return session
 
@@ -48,6 +49,7 @@ def pinned_session(user_id: str) -> ChatSession:
 
     Everything the widget asks lands in a single thread, so its memory and rolling
     summary accumulate across the whole demo instead of resetting per question.
+    Calling twice returns the same session id.
     """
     with SessionLocal() as s:
         existing = (
@@ -61,17 +63,62 @@ def pinned_session(user_id: str) -> ChatSession:
 def reset_pinned_session(user_id: str) -> str:
     """Clear the chatbot thread without deleting the session it is pinned to."""
     session = pinned_session(user_id)
+    clear_messages(session.id)
     with SessionLocal() as s:
-        s.query(ChatMessage).filter_by(session_id=session.id).delete()
         row = s.get(ChatSession, session.id)
         if row:
             row.summary = ""
-        s.commit()
+            s.commit()
     audit.record("chatbot.reset", user_id=user_id, resource=session.id)
     return session.id
 
 
+def write_message(session_id: str, role: str, content: str, **fields) -> ChatMessage:
+    """Persist one chat message on a session."""
+    with SessionLocal() as s:
+        message = ChatMessage(session_id=session_id, role=role, content=content, **fields)
+        s.add(message)
+        s.commit()
+        s.refresh(message)
+        return message
+
+
+def list_messages(
+    session_id: str,
+    page: int = 1,
+    page_size: int = 5,
+) -> tuple[list[ChatMessage], int]:
+    """Paginated messages for a session, oldest first within the page window.
+
+    Returns (rows, total). Page is 1-indexed.
+    """
+    page = max(1, page)
+    page_size = max(1, min(page_size, 100))
+    with SessionLocal() as s:
+        q = s.query(ChatMessage).filter_by(session_id=session_id)
+        total = q.count()
+        rows = (
+            q.order_by(ChatMessage.created_at.asc())
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+            .all()
+        )
+        return list(rows), total
+
+
+def clear_messages(session_id: str) -> int:
+    """Delete every message in a session. Returns how many rows were removed."""
+    with SessionLocal() as s:
+        deleted = s.query(ChatMessage).filter_by(session_id=session_id).delete()
+        s.commit()
+        return deleted
+
+
 def touch(session_id: str, title: str | None = None) -> None:
+    """Bump updated_at; optionally set title on a still-untitled multi-session thread.
+
+    The pinned chatbot drawer keeps CHATBOT_TITLE forever.
+    """
     with SessionLocal() as s:
         session = s.get(ChatSession, session_id)
         if not session:
@@ -79,6 +126,17 @@ def touch(session_id: str, title: str | None = None) -> None:
         if title and session.title == "New conversation":
             session.title = title[:TITLE_CHARS]
         s.commit()
+
+
+def set_title(session_id: str, title: str) -> None:
+    """Set a session title after first-turn inference (never renames the pinned drawer)."""
+    with SessionLocal() as s:
+        session = s.get(ChatSession, session_id)
+        if not session or session.title == CHATBOT_TITLE:
+            return
+        if session.title == "New conversation" or not session.title:
+            session.title = title[:TITLE_CHARS]
+            s.commit()
 
 
 def delete_session(session_id: str, user_id: str) -> bool:
