@@ -17,7 +17,12 @@ REPO_ROOT = BACKEND_DIR.parent
 SQLITE_DIR = REPO_ROOT / "db" / "sqlite" / "data"
 VECTOR_DIR = REPO_ROOT / "db" / "vectordb" / "data"
 
-load_dotenv(BACKEND_DIR / ".env")
+# override=True: this project's .env is the single source of truth (see module
+# docstring). Without it, python-dotenv leaves any pre-existing OS/session-level
+# env var in place — on this machine an unrelated OPENAI_API_KEY was already set
+# at the user level, silently shadowing the key configured here for the TCS
+# genailab proxy and causing every hosted call to 401 with the wrong token.
+load_dotenv(BACKEND_DIR / ".env", override=True)
 
 
 def _bool(key: str, default: bool) -> bool:
