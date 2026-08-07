@@ -5,7 +5,7 @@ Defined once here and imported everywhere. Do not redeclare a shape in a route.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
@@ -52,15 +52,37 @@ _PRIORITY_NAMES = frozenset({"Highest", "High", "Medium", "Low"})
 #: ticket_stats — the LLM never supplies a number that a table can answer.
 SLA_TARGET_MINS: dict[str, dict[str, int]] = {
     "Highest": {"respond": 15, "resolve": 240},
-    "High": {"respond": 30, "resolve": 480},
-    "Medium": {"respond": 120, "resolve": 1440},
-    "Low": {"respond": 480, "resolve": 4320},
+    "High": {"respond": 30, "resolve": 1440},     # 1 day
+    "Medium": {"respond": 120, "resolve": 4320},  # 3 days
+    "Low": {"respond": 480, "resolve": 5760},     # 4 days
 }
 
 
 def sla_target_mins(priority: str | None, kind: str = "resolve") -> int:
     """Resolution (default) or response target for a band. 0 when unset."""
     return SLA_TARGET_MINS.get(normalize_severity(priority), {}).get(kind, 0)
+
+
+def sla_elapsed_fraction(created_at, priority: str | None) -> float | None:
+    """How far a ticket is into its Priority's SLA *resolve* window, as a
+    fraction (1.0 == exactly at the deadline, >1.0 == overdue).
+
+    None when there's nothing to compute against (no created_at, or a
+    priority with no configured target) — callers treat that as "not at
+    risk" rather than "0% elapsed", since the two mean different things.
+
+    Single definition shared by the Control Tower "SLA at risk" stat
+    (ai/tools.py::ticket_stats / triage_analytics) and the breach-warning
+    email (integrations/sla_monitor.py) — both used to independently decide
+    "Highest severity, still open" and "70% of resolve target elapsed"
+    respectively, which drifted into two different numbers on the same
+    dashboard label. This is now the one place either question is answered.
+    """
+    resolve_mins = sla_target_mins(priority, "resolve")
+    if not created_at or not resolve_mins:
+        return None
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    return (now - created_at).total_seconds() / 60 / resolve_mins
 
 
 def normalize_severity(value: str | None) -> str:

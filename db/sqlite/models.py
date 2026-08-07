@@ -57,6 +57,11 @@ class User(Base):
     # Team membership rides here: engineer clearances are one of ops|azure|aws|gcp;
     # manager/admin use ["all"].
     clearances = Column(JSON, nullable=False, default=list)
+    # Notification target — integrations/sla_monitor.py looks this up for every
+    # admin/manager user rather than reading a fixed address out of config, so
+    # who gets SLA-breach emails follows the user table, not a .env constant.
+    # Additive column per the no-migration rule (see _migrate_sqlite_columns).
+    email = Column(String, nullable=True, default="")
     created_at = Column(DateTime, default=_now)
 
     def set_password(self, raw: str) -> None:
@@ -71,6 +76,7 @@ class User(Base):
             "username": self.username,
             "role": self.role,
             "clearances": self.clearances or [],
+            "email": self.email or "",
         }
 
 
@@ -283,6 +289,11 @@ class Ticket(Base):
     held_out = Column(Boolean, default=False, index=True)
     sync_attempts = Column(Integer, default=0)
     last_error = Column(Text, default="")
+    # Set the first time integrations/sla_monitor.py emails admin/manager users
+    # that this ticket crossed SLA_WARNING_THRESHOLD of its resolve target —
+    # makes the notification one-shot per ticket instead of resending every
+    # check cycle. Additive column per the no-migration rule.
+    sla_warning_sent_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=_now, index=True)
     updated_at = Column(DateTime, default=_now, onupdate=_now)
 
@@ -316,6 +327,7 @@ class Ticket(Base):
             "held_out": self.held_out,
             "sync_attempts": self.sync_attempts,
             "last_error": self.last_error,
+            "sla_warning_sent_at": self.sla_warning_sent_at.isoformat() if self.sla_warning_sent_at else None,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }
@@ -377,7 +389,7 @@ engine = create_engine(
     settings.DATABASE_URL,
     future=True,
     # integrations/poller.py now triages a sync batch's tickets concurrently
-    # (ai.llm.parallel_map, bounded by MAX_PARALLEL_WORKERS) — several threads
+    # (its own _TICKET_POOL, bounded by MAX_PARALLEL_WORKERS) — several threads
     # can commit around the same moment. SQLite's default rollback-journal mode
     # only ever allows one writer at a time and gives up after the sqlite3
     # driver's default 5s busy-wait, which is tight enough to occasionally
@@ -393,12 +405,14 @@ SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False
 
 
 _DEMO_USERS = [
-    ("admin", "admin123", "admin", ["all"]),
-    ("manager", "manager123", "admin", ["all"]),
-    ("ops1", "ops123", "engineer", ["ops"]),
-    ("azure1", "azure123", "engineer", ["azure"]),
-    ("aws1", "aws123", "engineer", ["aws"]),
-    ("gcp1", "gcp123", "engineer", ["gcp"]),
+    # username, password, role, clearances, email (notification target —
+    # integrations/sla_monitor.py emails every admin/manager row with one set)
+    ("admin", "admin123", "admin", ["all"], ""),
+    ("manager", "manager123", "admin", ["all"], "aifridayteam8@gmail.com"),
+    ("ops1", "ops123", "engineer", ["ops"], ""),
+    ("azure1", "azure123", "engineer", ["azure"], ""),
+    ("aws1", "aws123", "engineer", ["aws"], ""),
+    ("gcp1", "gcp123", "engineer", ["gcp"], ""),
 ]
 
 
@@ -413,6 +427,10 @@ def _migrate_sqlite_columns() -> None:
         "tickets": {
             "reporter": "VARCHAR DEFAULT ''",
             "assignee": "VARCHAR DEFAULT ''",
+            "sla_warning_sent_at": "DATETIME",
+        },
+        "users": {
+            "email": "VARCHAR DEFAULT ''",
         },
     }
     with engine.begin() as conn:
@@ -469,10 +487,10 @@ def init_db() -> None:
     Base.metadata.create_all(engine)
     _migrate_sqlite_columns()
     with SessionLocal() as s:
-        for username, password, role, clearances in _DEMO_USERS:
+        for username, password, role, clearances, email in _DEMO_USERS:
             if s.query(User).filter_by(username=username).first():
                 continue
-            user = User(username=username, role=role, clearances=list(clearances))
+            user = User(username=username, role=role, clearances=list(clearances), email=email)
             user.set_password(password)
             s.add(user)
         s.commit()

@@ -64,8 +64,10 @@ def create_app() -> Flask:
     )
 
     from integrations.poller import start_background_poller
+    from integrations.sla_monitor import start_sla_monitor
 
     start_background_poller()
+    start_sla_monitor()
 
     return app
 

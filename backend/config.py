@@ -154,6 +154,24 @@ class Settings:
     JIRA_FIELD_ROUTED_TEAM = os.getenv("JIRA_FIELD_ROUTED_TEAM", "").strip()
     JIRA_FIELD_AI_CONFIDENCE = os.getenv("JIRA_FIELD_AI_CONFIDENCE", "").strip()
 
+    # --- SLA breach notification (backend/integrations/) -----------------------
+    # Fires one email per open ticket the first time it crosses
+    # SLA_WARNING_THRESHOLD of its Priority's resolve target (rag/schemas.py::
+    # SLA_TARGET_MINS) — Ticket.sla_warning_sent_at makes that a one-shot per
+    # ticket, not a repeat every check cycle. Recipients are looked up from
+    # User.email (users.role in "admin"/"manager"), not a fixed address here,
+    # so adding/removing a manager account is the only thing that changes who
+    # gets notified.
+    SLA_WARNING_THRESHOLD = _float("SLA_WARNING_THRESHOLD", 0.70)
+    SLA_CHECK_SECONDS = _int("SLA_CHECK_SECONDS", 900)  # 15 min
+    # Resend's HTTPS API (port 443) — chosen over raw SMTP because 25/465/587
+    # are commonly blocked outbound on hosted/corporate networks that
+    # otherwise allow HTTPS fine (confirmed on this deployment:
+    # smtp.gmail.com:587/465 both time out at the TCP level, api.resend.com:443
+    # does not). No SMTP fallback: one transport, one thing to configure.
+    RESEND_API_KEY = os.getenv("RESEND_API_KEY", "").strip()
+    NOTIFY_FROM_EMAIL = os.getenv("NOTIFY_FROM_EMAIL", "onboarding@resend.dev").strip()
+
     def ensure_dirs(self) -> None:
         for d in (SQLITE_DIR, VECTOR_DIR, self.CHROMA_PERSIST_DIR, self.UPLOAD_DIR, self.SEED_DIR):
             d.mkdir(parents=True, exist_ok=True)

@@ -25,7 +25,7 @@ from db.sqlite.models import SessionLocal, Ticket as TicketRow, TriageRun, User
 from guardrails.governance import audit
 from observability.telemetry import log
 from rag.rag_retriever import retrieve
-from rag.schemas import TicketStats, normalize_severity
+from rag.schemas import TicketStats, normalize_severity, sla_elapsed_fraction
 
 # Demo default — not derived from real headcount or on-call rosters, since this
 # system has no source for either. A production deployment would pull this from
@@ -152,8 +152,10 @@ def ticket_stats(
         by_status[row.status] = by_status.get(row.status, 0) + 1
         if row.status == "awaiting_approval":
             awaiting_approval += 1
-        if row.severity == "Highest" and row.status not in ("resolved", "synced"):
-            sla_at_risk += 1
+        if row.status not in ("resolved", "synced"):
+            frac = sla_elapsed_fraction(row.created_at, row.severity)
+            if frac is not None and frac >= settings.SLA_WARNING_THRESHOLD:
+                sla_at_risk += 1
 
     return TicketStats(
         total=len(rows),
@@ -399,8 +401,10 @@ def triage_analytics(user: dict | None = None) -> dict:
             by_team_oldest[row.assigned_team] = max(by_team_oldest.get(row.assigned_team, 0), age)
         if row.status == "awaiting_approval":
             awaiting_approval += 1
-        if row.severity == "Highest" and is_open:
-            sla_at_risk += 1
+        if is_open:
+            frac = sla_elapsed_fraction(row.created_at, row.severity)
+            if frac is not None and frac >= settings.SLA_WARNING_THRESHOLD:
+                sla_at_risk += 1
         if row.created_at:
             day = row.created_at.date().isoformat()
             bucket = over_time.setdefault(day, {"triaged": 0, "overridden": 0})
