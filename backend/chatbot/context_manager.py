@@ -12,16 +12,19 @@ from __future__ import annotations
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
-from ai.prompts import ANSWER_PROMPT, SYSTEM_PERSONA
+from ai.llm import chat_json
+from ai.prompts import ANSWER_PROMPT, SUGGEST_FOLLOWUPS_PROMPT, SYSTEM_PERSONA
 from config import settings
 from db.sqlite.models import ChatMessage
+from observability.telemetry import log
 from rag.rag_retriever import build_context
 from rag.schemas import RetrievedChunk
 
 # Conservative for a 3B local model with an 8k window. Raise on build day if the
-# hosted keys land a bigger model. [PLACEHOLDER: tune to the deployed context window]
+# hosted keys land a bigger model.
 MAX_CONTEXT_CHARS = 6000
 CHARS_PER_TOKEN = 4  # rough, but stable enough for budgeting
+TITLE_CHARS = 60
 
 
 def fit_chunks(chunks: list[RetrievedChunk], budget: int = MAX_CONTEXT_CHARS) -> list[RetrievedChunk]:
@@ -71,3 +74,42 @@ def build_messages(
 
 def estimate_tokens(messages: list) -> int:
     return sum(len(str(m.content)) for m in messages) // CHARS_PER_TOKEN
+
+
+def suggest_followups(summary: str, answer: str, trace=None) -> list[str]:
+    """Propose up to 3 next questions grounded in the KB / last answer."""
+    try:
+        result = chat_json(
+            SUGGEST_FOLLOWUPS_PROMPT.format(
+                summary=summary or "(none)",
+                answer=(answer or "")[:1200],
+            ),
+            fast=True,
+            trace=trace,
+            default={},
+        )
+        return [s for s in (result or {}).get("suggestions", []) if isinstance(s, str)][:3]
+    except Exception as exc:  # noqa: BLE001
+        log.warning("follow-up suggestions failed: %s", exc)
+        return []
+
+
+def infer_title(first_message: str, answer: str = "") -> str:
+    """One-line session title from the first exchange (no extra LLM call).
+
+    Uses the user question as the topic signal; falls back to a generic label.
+    """
+    text = (first_message or "").strip()
+    if not text:
+        return "New conversation"
+    # Prefer the question side; strip trailing punctuation noise.
+    line = text.split("\n", 1)[0].strip().rstrip("?.!")
+    if len(line) > TITLE_CHARS:
+        line = line[: TITLE_CHARS - 1].rstrip() + "…"
+    return line or "New conversation"
+
+
+def under_budget(messages: list, max_tokens: int | None = None) -> bool:
+    """True when the assembled prompt fits the configured token budget."""
+    budget = max_tokens or (MAX_CONTEXT_CHARS // CHARS_PER_TOKEN)
+    return estimate_tokens(messages) <= budget

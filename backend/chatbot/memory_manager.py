@@ -6,20 +6,21 @@
               entities and decisions from a 40-turn conversation inside a small
               context window without replaying the whole transcript.
 
-The summary is also what `rag_retriever.rewrite_query` uses to make follow-ups
-searchable, so it is retrieval infrastructure, not just chat polish.
+`rewrite_query` uses the summary to make follow-ups searchable before they hit
+Shashank's retriever.
 """
 
 from __future__ import annotations
 
-from ai.llm import chat
-from ai.prompts import SUMMARIZE_CONVERSATION_PROMPT
+from ai.llm import chat, chat_json
+from ai.prompts import QUERY_REWRITE_PROMPT, SUMMARIZE_CONVERSATION_PROMPT
 from db.sqlite.models import ChatMessage, ChatSession, SessionLocal
 from observability.telemetry import log
 
 RECENT_TURNS = 6          # messages (not exchanges) replayed verbatim
 SUMMARY_EVERY = 6         # refresh the rolling summary every N messages
 MAX_MESSAGE_CHARS = 1500  # truncate long pasted content in the replay window
+MAX_SUMMARY_WORDS = 120
 
 
 def recent_messages(session_id: str, limit: int = RECENT_TURNS) -> list[ChatMessage]:
@@ -34,6 +35,11 @@ def recent_messages(session_id: str, limit: int = RECENT_TURNS) -> list[ChatMess
     return list(reversed(rows))
 
 
+def get_history(session_id: str, limit: int = RECENT_TURNS) -> list[ChatMessage]:
+    """Short-term buffer: last N messages in chronological order (user + assistant)."""
+    return recent_messages(session_id, limit=limit)
+
+
 def get_summary(session_id: str) -> str:
     with SessionLocal() as s:
         session = s.get(ChatSession, session_id)
@@ -45,7 +51,30 @@ def append_message(session_id: str, role: str, content: str, **fields) -> ChatMe
         message = ChatMessage(session_id=session_id, role=role, content=content, **fields)
         s.add(message)
         s.commit()
+        s.refresh(message)
         return message
+
+
+def rewrite_query(question: str, summary: str = "", trace=None) -> str:
+    """Turn a follow-up into a standalone search query using the rolling summary.
+
+    Example: "What about the second one?" + summary about AWS outages
+           → "Tell me about the second AWS outage"
+    """
+    if not (summary or "").strip():
+        return question
+    try:
+        result = chat_json(
+            QUERY_REWRITE_PROMPT.format(summary=summary, question=question),
+            fast=True,
+            trace=trace,
+            default={},
+        )
+        rewritten = ((result or {}).get("query") or "").strip()
+        return rewritten or question
+    except Exception as exc:  # noqa: BLE001 - raw question beats a failed rewrite
+        log.warning("query rewrite failed: %s", exc)
+        return question
 
 
 def maybe_summarize(session_id: str, trace=None) -> str:
@@ -61,7 +90,8 @@ def maybe_summarize(session_id: str, trace=None) -> str:
         return current
 
     turns = "\n".join(
-        f"{m.role}: {m.content[:MAX_MESSAGE_CHARS]}" for m in recent_messages(session_id, SUMMARY_EVERY)
+        f"{m.role}: {m.content[:MAX_MESSAGE_CHARS]}"
+        for m in recent_messages(session_id, SUMMARY_EVERY)
     )
     try:
         updated = chat(
@@ -75,6 +105,10 @@ def maybe_summarize(session_id: str, trace=None) -> str:
         return current
 
     if updated:
+        # Soft-enforce the <120 word budget from the plan.
+        words = updated.split()
+        if len(words) > MAX_SUMMARY_WORDS:
+            updated = " ".join(words[:MAX_SUMMARY_WORDS])
         with SessionLocal() as s:
             session = s.get(ChatSession, session_id)
             if session:
