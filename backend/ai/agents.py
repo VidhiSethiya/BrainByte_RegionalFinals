@@ -36,6 +36,7 @@ from ai.prompts import (
     SEVERITY_ASSESS_PROMPT,
     TRIAGE_CLASSIFY_PROMPT,
 )
+from chatbot.context_manager import build_messages
 from config import settings
 from db.sqlite.models import SessionLocal
 from db.sqlite.models import Ticket as TicketRow
@@ -130,14 +131,6 @@ def generate(state: AgentState) -> AgentState:
     chunks = state.get("chunks") or []
     if state.get("route") != "direct" and not chunks:
         return {"answer": NO_CONTEXT_ANSWER, "context": "", "groundedness": 0.0}
-
-    # Deferred, not top-level: chatbot/__init__.py re-exports handle_message from
-    # chatbot.conversation_manager, which imports `run_turn` from this module —
-    # a real cycle if resolved at *module* load time. Delaying it to *call* time
-    # means ai.agents has already finished loading by the time this runs, same
-    # fix either side of the cycle could apply; this side doesn't require
-    # touching chatbot/__init__.py.
-    from chatbot.context_manager import build_messages
 
     messages, context = build_messages(
         state["question"],
