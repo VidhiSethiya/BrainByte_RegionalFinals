@@ -21,7 +21,7 @@ Jira ticket (poll/webhook) → De-identify → Retrieval (precedent + runbooks +
 There is a second, simpler pipeline alongside this one — a knowledge-base chat surface
 (`/api/chat`, `/api/chatbot`) that answers free-text questions from the same indexed
 corpus using a 4-node graph (`plan → retrieve → generate → verify`). The ticket graph is
-the product's centrepiece; the chat graph is how a manager asks "how many S1 this week"
+the product's centrepiece; the chat graph is how a manager asks "how many P1 this week"
 or "what usually fixes an RDS failover."
 
 ---
@@ -50,6 +50,18 @@ is fenced as untrusted third-party data in every prompt, not treated as instruct
 `backend/ai/agents.py::triage_normalize · integrations/{jira,synthetic,poller}.py ·
 rag/anonymizer.py`
 
+**The other ingestion path — standalone documents.** Runbooks, the service catalogue and
+the SLA policy don't come from Jira; they arrive via `POST /api/documents/upload` (PDF,
+text) or `POST /api/documents/text` (paste), on the Knowledge Base screen. PDF pages with
+almost no extractable text are rendered and read by the vision model
+(`azure_ai/genailab-maas-Llama-3.2-90B-Vision-Instruct`) instead of entering the index as
+empty chunks — this is what lets a screenshot of an error dialog or a scanned runbook page
+still be searchable. `GET /api/documents` / `DELETE /api/documents/<id>` back the
+paginated table and its governance record in SQLite (`documents`), same split as tickets:
+SQLite holds who may see it, Chroma holds the content.
+
+`backend/rag/multimodal.py · api.py::upload_document/upload_text`
+
 ---
 
 ## Step 2 — Index
@@ -63,13 +75,16 @@ section separators (`## Symptom`, `## Diagnosis`, `## Fix`, `Steps to reproduce`
 (`doc_type=runbook|service_catalog|sla_policy`), all in one collection under
 `db/vectordb/data/chroma`.
 
-**Embeddings — one model, always.** Every chunk is embedded with the hosted
-`azure/genailab-maas-text-embedding-3-large` (3072-dim), with **no local fallback model**.
-Chat can safely drop to local Ollama mid-session because each chat call is independent,
-but embeddings cannot: mixing a different model's vector space into one Chroma collection
-silently corrupts similarity search (or fails outright on the dimension mismatch). This
-was a deliberate fix this build — an earlier version embedded through whichever the
-resolved provider happened to be, local or hosted, and that ambiguity is now removed.
+**Embeddings — hosted by default, with an emergency-only stopgap.** Every chunk is
+embedded with `azure/genailab-maas-text-embedding-3-large` (3072-dim) whenever the
+gateway is reachable — deliberately **not** following the same local/hosted split as
+chat, because mixing a different model's vector space into one Chroma collection
+silently corrupts similarity search (or fails outright on the dimension mismatch). If the
+hosted call itself raises — a genailab.tcs.in outage, not just a slow response —
+`embed_texts()`/`embed_query()` fall back to local `gte-large` rather than dead-lettering
+every ticket for the outage's duration, logging loudly every time it fires. Anything
+embedded during that window is in a different vector space and needs a reseed once
+hosted recovers; this is a stated trade-off, not a silent one.
 
 `backend/rag/rag_indexer.py · rag/chunker.py · ai/llm.py::get_embeddings() ·
 ai/agents.py::ingest_and_triage()`
@@ -111,7 +126,7 @@ the codebase.
 They answer completely different questions.
 
 **SQLite answers "which exact rows, in what order?"** — show me the AWS team's open
-queue sorted by priority score, count how many S1s were routed this week, find a ticket
+queue sorted by priority score, count how many P1s were routed this week, find a ticket
 by its Jira key. Exact lookups, sorting, counting, joining. That is what a relational
 database is for.
 
@@ -142,8 +157,9 @@ vector one by one on every triage, which gets slow immediately.
   accuracy eval, `sync_attempts`, `last_error`.
 - **`triage_runs`** — one row per agent execution: the full `TriageDecision` JSON, model
   used, tier, tokens, cost, latency, `trace_id`, which guardrails fired. This is what
-  makes "accuracy over time" and "which model made this call" answerable, and what
-  `GET /api/tickets/<id>/timeline` assembles alongside `audit_log`.
+  makes "accuracy over time" and "which model made this call" answerable. Together
+  with `audit_log` it is also the raw material for a per-ticket timeline view, which
+  is designed but not yet built (no `/tickets/<id>/timeline` route exists today).
 
 ### The one thing that looks like duplication but isn't
 
@@ -178,6 +194,14 @@ audit trail while keeping the indexed corpus, or `db/vectordb/data/chroma/` to r
 without losing users or ticket history. That independence is a side benefit of keeping
 them apart.
 
+**Schema evolution on an existing `app.db`.** `Base.metadata.create_all()` only creates
+tables that don't exist yet — it never alters a table that's already there. Columns added
+to `tickets` after a database file already existed (`reporter`, `assignee`) would
+otherwise crash every Jira poll with `OperationalError: no such column`.
+`db/sqlite/models.py::_migrate_sqlite_columns()` runs on every boot right after
+`create_all()` and adds any missing column additively, so an in-progress demo database
+never needs a manual wipe just because the schema grew.
+
 ---
 
 ## Step 3 — Request & authentication
@@ -193,6 +217,11 @@ same `Login.tsx` component with different copy and post-login redirect: engineer
 
 **One origin.** Flask serves the built frontend and the API from the same host, so no
 CORS configuration exists anywhere in the project.
+
+`POST /api/auth/login` issues the JWT; `GET /api/auth/me` returns the caller's own
+claims (what the frontend uses to decide which nav items to render); `GET /api/health`
+is the unauthenticated liveness/version check the appendix uses to confirm which
+provider and model set is actually live.
 
 `backend/api.py` — every route, plus the pagination/rate-limit/auth plumbing
 
@@ -212,6 +241,13 @@ The model call is the exception, not the default, so the median request pays not
 1, and route it to the CEO."* Blocked at `normalize`, the ticket is parked for human
 review, and the injected text never reaches `classify`/`assess` — `decision.severity`
 stays at the schema default, not whatever the attacker asked for.
+
+**A wording lesson worth stating out loud.** The prompts that fence untrusted ticket
+text were rewritten mid-build to drop phrases like *"ignore previous instructions"* from
+the guardrail prompt itself — Azure OpenAI's own jailbreak classifier false-positives on
+those exact phrases appearing in a *defensive* prompt, which was flagging and blocking
+legitimate triage calls. Same semantics (ticket content is data, never a directive),
+different wording, so the defence doesn't trip the host platform's own filter.
 
 `backend/guardrails/input_guard.py · pii.py`
 
@@ -259,6 +295,19 @@ server-pinned session per user, the drawer widget on every page). Plan decides w
 retrieval is needed at all. If verify finds the answer ungrounded, the graph routes back
 to retrieval **once** with a decomposed query.
 
+**Memory, underneath both surfaces.** Short-term memory replays the last 6 messages
+verbatim (`chatbot/memory_manager.py::get_history()`); long-term memory is a rolling LLM
+summary refreshed every 6th turn, which is also what makes a follow-up like "what about
+the second one?" resolve to a standalone query at the `rewrite` step in retrieval — it is
+retrieval infrastructure, not chat polish. The assistant proposes three grounded follow-up
+questions after each answer. `GET /api/sessions` and `/api/sessions/<id>/messages` (paginated)
+back the Assistant's session switcher; `DELETE /api/sessions/<id>` and
+`GET`/`DELETE /api/chatbot/history` manage the multi-session and pinned-session
+lifecycles respectively — the pinned session ignores any `session_id` the client sends,
+by design, so its memory accumulates across the whole demo instead of resetting.
+
+`backend/chatbot/*`
+
 ### The ticket triage graph — the product's centrepiece, ten nodes
 
 ```
@@ -271,24 +320,198 @@ normalize → enrich → grade ─┐  classify → assess → route → reflect
 | `enrich` | retrieve precedent tickets, runbook, service catalogue, SLA policy | tool calls |
 | `grade` | CRAG: are these chunks actually about this failure? keep / re-retrieve (max 1) / no-precedent | fast |
 | `classify` | category + subcategory + affected service, enum-constrained | fast |
-| `assess` | severity (S1–S4) + priority score, grounded in the SLA matrix + precedent MTTR | **deep** — the highest-blast-radius decision gets the strongest model |
+| `assess` | rates 15 rulebook metrics with quoted evidence; **the score and band are then computed in Python, not by the model** — see "How severity is actually decided" below | **deep** — the highest-blast-radius decision gets the strongest model |
 | `route` | owning team from the service catalogue and current team capacity | standard, tool calls |
 | `reflect` | self-critique against the cited evidence — may lower confidence, never raise it; one loop back to `enrich` on failure | fast |
 | `verify` | existing output-guard module: groundedness + policy + PII leak | — |
-| `gate` | human-in-the-loop: `needs_human` if confidence < 0.70, severity = S1, a guardrail fired, or a duplicate is ambiguous | — |
+| `gate` | human-in-the-loop: `needs_human` if confidence < 0.70, priority = P1, a guardrail fired, a duplicate is ambiguous, the score sits within `band_margin` 0.10 of a boundary, or the decision **downgrades** a human-reported priority | — |
 | `sync` | assembles the decision, persists `triage_runs`, previews the auto-approve band | — |
 
-**Bounded by construction.** `grade` and `reflect` each retry to `enrich` at most once
-(`MAX_GRADE_RETRIES = MAX_REFLECT_RETRIES = 1`, two independent budgets) — no unbounded
-loop is reachable.
+**Bounded by construction — and the budget lives in the right place.** `grade` and
+`reflect` each retry to `enrich` at most once (`MAX_GRADE_RETRIES = MAX_REFLECT_RETRIES =
+1`, two independent budgets). The retry counters are incremented **inside `triage_grade`/
+`triage_reflect` themselves**, not in the conditional-edge router functions that route to
+the next node — LangGraph discards state mutations made inside a router, so an earlier
+version that bumped the counter there never actually persisted it, and a model that kept
+asking to rewrite could loop `enrich` indefinitely. Routers now only read state; nodes own
+their own budget. This is the kind of bug that only shows up under real model behaviour,
+not a unit test with a canned response — worth stating plainly if a judge asks "how do you
+know the bound actually holds."
 
 **Escalation ladder on failure.** deep model → fast model → deterministic keyword routing
 from the service catalogue (`ai/tools.py::rule_route`) → unassigned human queue. The
 system degrades to "a human sees it," never to silence and never to a guess presented as
 certainty.
 
-**Human control.** Auto-approve requires confidence ≥ 0.85 **and** severity in {S3, S4}
-— anything else, and every S1 regardless of confidence, waits for a manager. Nothing
+---
+
+### How a ticket gets its priority — the rulebook
+
+> **Status:** the rulebook is written (`docs/PRIORITY_RULEBOOK.md`, v1.0.0). The pipeline
+> wiring described here is the agreed design; the file map at the end of this section
+> marks what is built and what is pending.
+
+**The problem this fixes.** The first version asked the model to return
+`priority_score: 0–100` directly. Nobody — not a reviewer, not an engineer, not the model
+on a second run — could explain why a ticket scored 72 rather than 65. An unfalsifiable
+number is not a decision, it is an opinion wearing a decision's clothes. The same applied
+to `confidence`: a model's self-reported certainty is uncalibrated and cannot be audited.
+
+**The split.** The model contributes judgement about *evidence*. It never contributes
+arithmetic.
+
+| The model does | The code does |
+|---|---|
+| Reads the ticket and retrieved context | — |
+| Rates **15 named metrics** on a 0–4 anchored scale | — |
+| Quotes the evidence for each, or marks it `not_stated` | — |
+| — | Computes Impact, Urgency, band, score, confidence |
+| — | Applies the override rules |
+
+This is the same principle the product already claims for `ticket_stats` — *"the LLM never
+counts"* — extended to the one number where it was previously being violated. Given the
+same 15 ratings, the score is reproducible by hand. A reviewer can dispute a *rating* and
+point at the quoted sentence; that is a productive argument. Nobody can dispute a number
+that came from nowhere.
+
+#### In plain language: how a ticket gets its P number
+
+Two questions, asked separately, then a lookup.
+
+**1. "How bad is it?"** — the Impact axis. Eight metrics: how many users, is it the
+revenue path, is money being lost, is the service down or just slow, was data lost, was a
+credential exposed, is a regulator involved, does anything else depend on it.
+
+**2. "How fast must we act?"** — the Urgency axis. Seven metrics: how fast the error
+budget is burning, is it getting worse, is there a workaround, is it peak hours, was there
+a recent change we can roll back, how long will recovery take, is the clock already
+missed.
+
+They are kept apart because **averaging them destroys the answer**. A cosmetic bug on the
+checkout page during a sale (everyone sees it, nobody is blocked) and a total outage of an
+internal dev tool (few people, but a release is blocked today) come out at the *same
+number* on one flat score, and need opposite responses.
+
+Each metric is scored 0–4 **with the sentence from the ticket that justifies it**, or
+marked "not stated". The model does that reading. The arithmetic — both axis totals, the
+band, the score — is done in Python. Then the band is read off a cell:
+
+| Impact ↓ / Urgency → | Critical | High | Medium | Low |
+|---|---|---|---|---|
+| **Extensive** | **P1** | **P1** | **P2** | **P3** |
+| **Significant** | **P1** | **P2** | **P2** | **P3** |
+| **Moderate** | **P2** | **P3** | **P3** | **P4** |
+| **Minor** | **P3** | **P3** | **P4** | **P4** |
+
+> **Two names for one thing.** The rulebook and the database reason in `P1–P4`; the
+> console and Jira show `Highest / High / Medium / Low`. Same band, translated at the API
+> boundary by `to_jira_priority()` so the UI and the Jira board speak one language and the
+> scoring code speaks another — see `docs/PRIORITY_RULEBOOK.md` §3.
+
+Finally a short list of **override rules** runs, because an average cannot express a veto:
+confirmed data loss, an exposed credential, or a multi-region outage each force **P1** on
+their own, no matter what the other fourteen metrics said. Each override must quote its
+evidence or it does not fire.
+
+#### In plain language: what confidence means
+
+**Shown out of 10. Stored as a probability (0–1).**
+
+Same number, scaled once at the display boundary — `7.2 / 10` reads faster than `0.72`,
+but storage has to stay a probability because confidence is defined as *"the chance a
+human upholds this decision"*, and you cannot calibrate a rating out of 10 against a
+real-world outcome rate. (Same pattern as P1–P4 versus Jira's Priority names: one
+canonical internal form, one readable form, converted in exactly one place.)
+
+Three separate reasons to doubt a decision, each scored 0–1:
+
+| Gate | Plain meaning |
+|---|---|
+| `evidence_coverage` | How much did we actually read, versus assume? |
+| `band_margin` | How close was this to landing in a different band? |
+| `precedent_agreement` | Have we seen this shape before and agreed then? *(skipped when no precedent was found — a novel incident should not be punished for being novel)* |
+
+```
+confidence = the lowest gate that applies      (not the average)
+```
+
+**Why the lowest, not the average.** Averaging hides the thing you most need to see.
+Perfect evidence sitting one point from a band boundary averages to about 7.5/10 and reads
+as confident — but it is a coin flip. Taking the minimum means any single reason to doubt
+caps the whole thing, which is also exactly what `_combined_confidence()` already does
+across the three graph nodes: *a decision chain is only as confident as its weakest link.*
+One rule, applied consistently. And there are **no weights to justify** — the "where did
+0.45 come from?" question simply has no target.
+
+**The number never appears alone.** Every decision records which gate held it down:
+
+> **Confidence 0.8 / 10** — limited by band margin: Impact 49.4 sits against the
+> Moderate/Significant boundary at 50. P2 and P3 are both defensible.
+
+That turns a score into a question a human can actually settle.
+
+**Two hard floors** force review on their own, whatever the number: `band_margin < 0.10`
+(a coin flip) and `evidence_coverage < 0.60` (more than 40% of the rubric was assumed).
+
+#### Two real tickets, end to end
+
+**`SCRUM-14` — "P2 AWS Lambda timeout spike in payment workflow"** · reported **P2**
+
+*How bad?* It is the payment path, and payment callbacks are failing — money is affected.
+→ Impact **Significant**.
+*How fast?* `timeout_rate=0.074` against a `threshold=0.01` — seven times over — and
+"retry volume increased significantly". → Urgency **Critical**.
+
+Cell → **P1**. All three gates high → confidence **8.6 / 10**.
+
+Reported P2, computed P1. That is an **upgrade**, so it applies **automatically** — no one
+needs to approve raising an alarm, and under-escalating a payments incident is the more
+expensive mistake.
+
+**`SCRUM-3` — "P1 Production Incident: API Gateway returning 504"** · reported **P1**
+
+*How bad?* "Intermittently returning HTTP 5xx" — degraded, not down. No user count given.
+No data loss. No security exposure. → Impact **Moderate**.
+*How fast?* Status is "Investigating". Nobody wrote down whether it is worsening, or
+whether a workaround exists. → Urgency **Medium**.
+
+Cell → **P3**. But six of the fifteen metrics were never stated, so
+`evidence_coverage = 0.5` — and that is the lowest gate → confidence **5.0 / 10**.
+
+Reported P1, computed P3. That is a **two-band downgrade on thin evidence**, so it does
+**not** apply automatically. It goes to the manager as a diff, and the honest headline is
+not "P3" — it is:
+
+> **"Probably not a P1 — and here are the six things nobody wrote down."**
+
+Which turns triage into a question the reporter can answer, instead of an argument about a
+number. An AI that silently downgrades a human's P1 is the fastest way to lose an on-call
+team's trust; the rule is **the machine may raise an alarm on its own, only a human may
+lower one.**
+
+#### Where each piece lives
+
+| Piece | File | What it does | Status |
+|---|---|---|---|
+| The rulebook — 15 metrics, anchors, matrix, override rules | `docs/PRIORITY_RULEBOOK.md` | Human-authored policy. Versioned + hashed. **Injected verbatim into the prompt, never RAG-retrieved** — retrieval returns *some* of a document, and two identical tickets scored against different fragments would be silently non-deterministic. A rubric is applied whole or it is not a rubric. | ✅ written |
+| `MetricRating`, `SeverityAssessment` | `backend/rag/schemas.py` | Pydantic shapes the model's 15 ratings validate against. Added **alongside** `SeverityVerdict`, not replacing it — that shape is owned by the RAG layer. | ⬜ pending |
+| Matrix, overrides, confidence maths | `backend/ai/severity_scoring.py` *(new)* | Pure functions — no LLM, no I/O, no database. This is the file that makes the score reproducible and unit-checkable by hand. | ⬜ pending |
+| Rulebook loader + version hash | `backend/ai/severity_scoring.py` | Reads the MD once, caches it, exposes `RULEBOOK_VERSION` and its SHA-256 for stamping onto `triage_runs`. | ⬜ pending |
+| Per-metric extraction prompt | `backend/ai/prompts.py` | `SEVERITY_ASSESS_PROMPT` rewritten: *rate these 15 and quote your evidence*, with **no score field in the output schema** — the model cannot emit a number it was never asked for. | ⬜ pending |
+| Graph wiring | `backend/ai/agents.py::triage_assess` | Calls the model for ratings, then the scorer for every number. | ⬜ pending |
+| Reported-vs-computed comparison + asymmetric rule | `backend/ai/agents.py::triage_gate` | Sets `needs_human` on any downgrade; lets upgrades through. | ⬜ pending |
+| Reporter's original priority | `backend/integrations/jira.py::issue_to_ticket_dict` | Already captured as `raw["priority"]` — needs reading, not building. | ✅ exists |
+| `reported_severity`, `computed_severity`, `impact_score`, `urgency_score`, `overrides_fired`, `rulebook_version` | `db/sqlite/models.py` (+ `_migrate_sqlite_columns()`) | Makes every decision reconstructible months later, including *which* rulebook version produced it. | ⬜ pending |
+| 15-row metric evidence table | `frontend/src/components/DecisionDrawer.tsx` | The screen that turns "trust the 72" into a page a reviewer can read. | ⬜ pending |
+| Reclassification diff in the approval queue | `frontend/src/pages/Control.tsx` | Reported vs computed, side by side, with the driving metrics. | ⬜ pending |
+
+**In the request flow, all of this sits inside Step 6's `assess` node** — between `classify`
+(which decided *what kind* of problem it is) and `route` (which decides *who owns it*).
+Nothing upstream or downstream changes shape; the node's inputs and outputs are the same,
+only the way it reaches its numbers is different.
+
+**Human control.** Auto-approve requires confidence ≥ 0.85 **and** priority in {P3, P4}
+— anything else, and every P1 regardless of confidence, waits for a manager. Nothing
 syncs back to Jira without either a human approval or clearing that explicit, narrow band.
 
 `backend/ai/agents.py · ai/tools.py · ai/prompts.py · chatbot/context_manager.py`
@@ -309,6 +532,14 @@ the current ticket is resolved/closed, claiming the assistant itself resolved so
 and inventing an ETA not sourced from the SLA policy.
 
 `backend/guardrails/output_guard.py · validators.py`
+
+**Human feedback, separate from ticket override.** Any chat/chatbot answer can be
+thumbs-up/down'd (`POST /api/feedback`); a manager reviews the queue
+(`GET /api/feedback`) and can supply a corrected answer (`PATCH /api/feedback/<id>/review`).
+This is the KB-answer-quality loop — distinct from a ticket's override, which is a
+different `feedback` row created by `PATCH /tickets/<id>/override` (Step 8). Both write to
+the same `feedback` table so both feed the eval set, but they are triggered by different
+actions on different surfaces.
 
 ---
 
@@ -331,9 +562,19 @@ enforces role scope before anything runs:
 unless the decision's status is `approved` (or the auto-approve band from Step 6 applies),
 and a refusal is audited as `tool.denied`. `POST /api/tickets/<id>/approve` runs the full
 chain: set status → tool re-checks independently → Jira write → comment with rationale →
-transition — the route setting a status is never treated as sufficient on its own.
+transition — the route setting a status is never treated as sufficient on its own. It also
+refuses (409) a ticket whose triage never actually finished — empty severity/team, or
+`status="failed"` — closing a real gap where an incomplete decision could be approved and
+write a blank `"TicketSphere:  ·  · priority 0 · confidence 0%"` comment onto the real
+Jira issue.
 
-**The LLM never counts.** "How many S1 incidents this week" is answered by
+**Severity is written to Jira by name, not by numeric id.** `integrations/jira.py::
+priority_group()` maps `P1–P4 → Highest/High/Medium/Low` and is the single source both the
+adapter's `update()` and every route that comments on a ticket (`approve_ticket`,
+auto-approve sync) call — Jira Priority ids are per-site and not guaranteed stable;
+names are.
+
+**The LLM never counts.** "How many P1 incidents this week" is answered by
 `ticket_stats`/`triage_analytics` (pure SQL), and the model only narrates the returned
 numbers — groundedness on those answers is exact by construction.
 
@@ -366,6 +607,19 @@ probes once at boot and caches the result for the process lifetime.
 | **embeddings** | `azure/genailab-maas-text-embedding-3-large` | always, no local fallback (Step 2) |
 | **local fallback (chat only)** | `llama-3.2-3b-it` via Ollama | automatic if the hosted probe fails |
 
+**One gateway quirk worth knowing.** `gpt-5*` models on the GenAI Lab gateway (including
+`genailab-maas-gpt-5.1`, the deep tier) reject `temperature=0` outright and only accept
+`temperature=1` — without a clamp, every deep-tier `chat_json` call (severity assessment,
+reflection) died with `UnsupportedParamsError` mid-triage. `ai/llm.py::
+_effective_temperature()` detects the model family and overrides to `1.0` only for those
+models; every other tier keeps the configured deterministic `LLM_TEMPERATURE`.
+
+**What actually feeds the Dashboard.** `GET /api/analytics/usage` (request volume, error
+rate, token spend over time), `/api/analytics/traces` (per-request latency/cost/model
+breakdown, expandable) and `/api/analytics/messages` (chat volume) are read-only SQL
+aggregates over `audit_log`/`triage_runs`/`chat_messages` — same "the LLM never counts"
+principle as `ticket_stats`, just for platform telemetry instead of ticket counts.
+
 `backend/guardrails/governance/audit.py · observability/telemetry.py · ai/llm.py`
 
 ---
@@ -377,8 +631,8 @@ probes once at boot and caches the result for the process lifetime.
 | Screen | Route | Who | Shows |
 |---|---|---|---|
 | Queue | `/queue` | engineer | own team's open tickets, severity/priority/SLA countdown, decision drawer with citations |
-| History | `/history` | both | past tickets, ACL-scoped, same decision drawer in read-only mode with the full audit timeline |
-| Triage | `/triage` | both | live node-by-node graph execution + a bulk-triage tab |
+| History | `/history` | both | past tickets, ACL-scoped, same decision drawer in read-only mode |
+| Triage | `/triage` | both | live node-by-node graph execution for one pasted ticket |
 | Control Tower | `/control` | manager | KPI tiles, charts, approval queue, override with mandatory reason |
 | Chat (Assistant) | `/chat` | manager | multi-session KB Q&A with citations |
 | Chatbot drawer | every page | both | single-session KB Q&A, reachable everywhere |
@@ -387,14 +641,11 @@ probes once at boot and caches the result for the process lifetime.
 | Evaluations | `/evals` | manager | classification accuracy, routing precision, severity MAE, confusion matrix, retrieval A/B |
 | Audit Trail | `/audit` | manager | every action, hash chain verification |
 
-Two chat surfaces on purpose: `/api/chat` is multi-session for the Assistant page;
-`/api/chatbot` is a **single server-pinned session** so the widget's memory and rolling
-summary build across the whole demo instead of resetting per question.
-
-An override always demands a reason and writes to `audit_log` **and** `feedback`, so it
-feeds the accuracy eval — the loop closes.
-
-`frontend/src/pages/* · frontend/FRONTEND_SPEC.md`
+Evals are two separate runs, not one: `POST /api/evals/run` scores the general KB
+`EVAL_SET` (12 questions, ≥2 that must be refused) against `guardrails/validators.py`;
+`POST /api/evals/run-triage` is the held-out labelled-ticket accuracy run described in
+Step 6/9. `GET /api/evals` lists stored results for both, which is what the Evals page
+reads on load rather than re-running anything live.
 
 ---
 
@@ -419,10 +670,16 @@ feeds the accuracy eval — the loop closes.
    typed objects, never prose, and both retry loops are capped at one so no unbounded
    loop is reachable
 8. **The LLM never counts** — aggregate questions are answered by a deterministic SQL
-   tool and only narrated by the model
-9. **Nothing acts without a human** — S1 and low-confidence decisions are gated for
-   approval, the only write tool refuses unapproved decisions, and the system recommends
-   a first action but never executes one
+   tool and only narrated by the model, and priority is scored by arithmetic over a
+   published rubric rather than emitted as a number nobody can check
+9. **Priority is a rubric, not an opinion** — 15 named metrics on two axes, a priority
+   matrix a reviewer can point at, and override rules for the facts that decide alone.
+   Every rating carries the sentence that justified it, so disagreement is about
+   evidence rather than about a mystery number
+10. **Nothing acts without a human** — P1 and low-confidence decisions are gated for
+   approval, the only write tool refuses unapproved decisions, a downgrade of a
+   human-reported priority always needs approval even when an upgrade does not, and the
+   system recommends a first action but never executes one
 
 ---
 

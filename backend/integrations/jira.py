@@ -28,6 +28,7 @@ import httpx
 from config import settings
 from integrations.ticket_source import TicketSource
 from observability.telemetry import log
+from rag.schemas import PRIORITY_TO_JIRA, to_jira_priority
 
 MAX_RETRIES = 3
 BACKOFF_BASE_SECONDS = 1.5
@@ -45,20 +46,21 @@ STATUS_TO_TRANSITION_NAME: dict[str, str] = {
 }
 
 # Four Priority groups in declining order — stock Jira Software names on the
-# TicketSphere SCRUM board. Maps TicketSphere severity S1–S4.
-SEVERITY_TO_PRIORITY_NAME: dict[str, str] = {
-    "S1": "Highest",
-    "S2": "High",
-    "S3": "Medium",
-    "S4": "Low",
-}
+# TicketSphere SCRUM board. The mapping itself is canonical and lives in
+# rag/schemas.py, because the UI and the analytics payload need the same table
+# and a second copy here is exactly how two call sites drift apart (which already
+# happened once with issue_to_ticket_dict). This module keeps the name that the
+# rest of the Jira code and api.py already import.
+SEVERITY_TO_PRIORITY_NAME = PRIORITY_TO_JIRA
 
 
-def priority_group(severity: str | None) -> str:
-    """Map TicketSphere S1–S4 to one of the four Jira Priority groups."""
-    if not severity:
-        return ""
-    return SEVERITY_TO_PRIORITY_NAME.get(str(severity).upper(), "")
+def priority_group(priority: str | None) -> str:
+    """Map a TicketSphere band (P1–P4) to its Jira Priority name.
+
+    This adapter is the ONLY place the words Highest/High/Medium/Low appear —
+    they are Jira's field vocabulary, not the product's. Everything upstream
+    speaks P1–P4."""
+    return to_jira_priority(priority)
 
 
 class JiraError(RuntimeError):

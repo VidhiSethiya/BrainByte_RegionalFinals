@@ -323,17 +323,19 @@ CATEGORY: {category} / {subcategory}
 CONTEXT (SLA policy, precedent tickets with resolution times, escalation matrix):
 {context}
 
-Severity definitions — do not deviate from these:
-- S1: production down or data loss in progress, no workaround, breaches SLA within
+Priority band definitions — do not deviate from these. They are the summary form of
+docs/PRIORITY_RULEBOOK.md; where the retrieved CONTEXT gives a specific SLA figure,
+CONTEXT wins over this summary:
+- P1: production down or data loss in progress, no workaround, breaches SLA within
   the hour if unaddressed
-- S2: production significantly degraded, or a workaround exists but is costly
-- S3: production partially affected with a workaround, or a non-prod
+- P2: production significantly degraded, or a workaround exists but is costly
+- P3: production partially affected with a workaround, or a non-prod
   production-bound issue
-- S4: cosmetic, informational, or a request with no active failure
+- P4: cosmetic, informational, or a request with no active failure
 
 Return JSON only, matching this schema exactly (SeverityVerdict in rag/schemas.py):
 {{
-  "severity": "S1|S2|S3|S4",
+  "severity": "P1|P2|P3|P4",
   "priority_score": 0-100,
   "sla_target_mins": <integer, taken from the SLA policy for this severity>,
   "confidence": 0.0-1.0,

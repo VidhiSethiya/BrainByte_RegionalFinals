@@ -57,7 +57,14 @@ from observability import evals
 from observability.telemetry import log, recent_traces, usage_summary
 from rag import rag_indexer
 from rag.rag_retriever import retrieve
-from rag.schemas import ChatRequest, FeedbackRequest, LoginRequest, OverrideRequest, TicketIngestRequest
+from rag.schemas import (
+    ChatRequest,
+    FeedbackRequest,
+    LoginRequest,
+    OverrideRequest,
+    TicketIngestRequest,
+    to_priority,
+)
 
 api_bp = Blueprint("api", __name__)
 
@@ -528,6 +535,20 @@ def _scope_ticket_query(query, user: dict):
     return query.filter(Ticket.assigned_team.in_(teams)) if teams else query.filter(False)
 
 
+def _normalize_ticket_filters(params):
+    """Normalise `filter[severity]` to the canonical P1–P4 band.
+
+    The column stores P1–P4 (docs/PRIORITY_RULEBOOK.md). `to_priority()` also
+    accepts the retired S1–S4 codes and Jira's Highest/High/Medium/Low, so a
+    bookmarked URL or an older client still resolves instead of silently
+    returning an empty list — which is exactly what happened when the frontend
+    moved to a new vocabulary and nothing translated at the boundary."""
+    raw = params.filters.get("severity")
+    if raw:
+        params.filters["severity"] = to_priority(raw) or raw
+    return params
+
+
 @api_bp.post("/tickets")
 @require_auth
 @rate_limit(per_minute=30)
@@ -557,7 +578,7 @@ def create_ticket():
 @api_bp.get("/tickets")
 @require_auth
 def list_tickets():
-    params = parse_query_params()
+    params = _normalize_ticket_filters(parse_query_params())
     with SessionLocal() as s:
         query = _scope_ticket_query(s.query(Ticket), g.user)
         query = apply_query(query, Ticket, params, searchable=["external_id", "title"])
@@ -571,7 +592,7 @@ def team_queue():
     """The engineer console's queue — open tickets only, same ACL scoping as
     /tickets. filter[status] still works for a manager who wants one team's open
     items without the closed history."""
-    params = parse_query_params()
+    params = _normalize_ticket_filters(parse_query_params())
     with SessionLocal() as s:
         query = _scope_ticket_query(s.query(Ticket), g.user)
         query = query.filter(Ticket.status.notin_(["resolved", "synced"]))
@@ -619,7 +640,14 @@ def override_ticket(ticket_id: str):
         if _scope_ticket_query(s.query(Ticket).filter_by(id=ticket_id), g.user).first() is None:
             return fail("not_found", "Ticket not found", 404)
 
-        setattr(row, payload.field, payload.new_value)
+        # Normalise the band on the way in. The column stores P1–P4; a client
+        # sending a retired S-code or a Jira Priority name still lands correctly
+        # instead of writing a string nothing downstream can match.
+        new_value = payload.new_value
+        if payload.field == "severity":
+            new_value = to_priority(str(new_value)) or new_value
+
+        setattr(row, payload.field, new_value)
         row.overridden_by = g.user["id"]
         row.override_reason = payload.reason
         s.commit()

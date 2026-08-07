@@ -60,6 +60,7 @@ from rag.schemas import (
     TicketIngestRequest,
     TriageDecision,
     TriageVerdict,
+    to_priority,
 )
 
 MAX_RETRIES = 1
@@ -264,7 +265,7 @@ CONFIDENCE_HUMAN_FLOOR = 0.70
 # to sync an unapproved decision — lives in ai/tools.py::ticket_update (Phase 2);
 # this graph never calls Jira directly, per rag-handoff.md §8.
 AUTO_APPROVE_CONFIDENCE = 0.85
-AUTO_APPROVE_SEVERITIES = {"S3", "S4"}
+AUTO_APPROVE_PRIORITIES = {"P3", "P4"}
 
 # How many chunks enrich asks for. Higher than the chat graph's default top_k
 # because one ticket decision needs evidence from up to four doc_types in one
@@ -559,7 +560,7 @@ def triage_assess(state: TriageState) -> TriageState:
     verdict = validate_json(
         raw,
         SeverityVerdict,
-        default=SeverityVerdict(severity="S3", priority_score=50, sla_target_mins=240, confidence=0.0),
+        default=SeverityVerdict(severity="P3", priority_score=50, sla_target_mins=240, confidence=0.0),
     )
     return {
         "severity": verdict.severity,
@@ -608,7 +609,7 @@ def triage_route(state: TriageState) -> TriageState:
             ticket_summary=summary,
             category=state.get("category", ""),
             subcategory=state.get("subcategory", ""),
-            severity=state.get("severity", "S3"),
+            severity=state.get("severity", "P3"),
             context=context or "(no service catalogue retrieved)",
         ),
         tier="standard",
@@ -654,7 +655,7 @@ def triage_reflect(state: TriageState) -> TriageState:
         REFLECT_PROMPT.format(
             category=state.get("category", ""),
             subcategory=state.get("subcategory", ""),
-            severity=state.get("severity", "S3"),
+            severity=state.get("severity", "P3"),
             priority_score=state.get("priority_score", 50),
             assigned_team=state.get("assigned_team", "ops"),
             confidence=base_confidence,
@@ -739,7 +740,7 @@ def triage_gate(state: TriageState) -> TriageState:
     reasons = []
     if state.get("blocked"):
         reasons.append(f"guardrail: {state.get('blocked_reason') or 'blocked'}")
-    if state.get("severity") == "S1":
+    if state.get("severity") == "P1":
         reasons.append("severity S1 always requires approval")
     confidence = state.get("confidence", 0.0)
     if confidence < CONFIDENCE_HUMAN_FLOOR:
@@ -763,7 +764,7 @@ def triage_sync(state: TriageState) -> TriageState:
     auto_approved = (
         not needs_human
         and state.get("confidence", 0.0) >= AUTO_APPROVE_CONFIDENCE
-        and state.get("severity") in AUTO_APPROVE_SEVERITIES
+        and to_priority(state.get("severity")) in AUTO_APPROVE_PRIORITIES
     )
     status = "routed" if auto_approved else "awaiting_approval" if needs_human else "triaged"
 
@@ -771,7 +772,7 @@ def triage_sync(state: TriageState) -> TriageState:
         ticket_id=ticket.id,
         category=state.get("category", ""),
         subcategory=state.get("subcategory", ""),
-        severity=state.get("severity", "S3"),
+        severity=state.get("severity", "P3"),
         priority_score=state.get("priority_score", 50),
         assigned_team=state.get("assigned_team", "ops"),
         sla_target_mins=state.get("sla_target_mins", 0),

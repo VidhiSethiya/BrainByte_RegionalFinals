@@ -28,9 +28,83 @@ DocType = Literal[
     "escalation_matrix",
 ]
 Team = Literal["ops", "azure", "aws", "gcp"]
-Severity = Literal["S1", "S2", "S3", "S4"]
 Environment = Literal["prod", "uat", "dev"]
 TicketSource = Literal["jira", "synthetic", "manual"]
+
+# --- priority: one vocabulary, end to end ------------------------------------
+#
+# P1–P4 is THE vocabulary — storage, API, and UI all speak it. There is no
+# separate "severity" scale any more: the product previously carried S1–S4
+# internally, "Highest/High/Medium/Low" in the UI and "P1/P2/P3" in conversation,
+# and three vocabularies for one concept is how a dashboard ends up rendering
+# blank tiles because two layers disagreed about what a row was called.
+#
+# The single exception is Jira's own Priority field, which only accepts its stock
+# names. That translation happens at the adapter boundary (`to_jira_priority`)
+# and nowhere else — nothing upstream of integrations/jira.py should ever see
+# the word "Highest".
+#
+# See docs/PRIORITY_RULEBOOK.md §3 for the canonical table and how a band is
+# assigned in the first place.
+
+Priority = Literal["P1", "P2", "P3", "P4"]
+
+#: Ordered worst-first. Index is also the rank used for sorting and for the
+#: mean-absolute-error metric on the evals page.
+PRIORITY_ORDER: tuple[str, ...] = ("P1", "P2", "P3", "P4")
+
+#: Jira's stock Priority names, in the same order. Adapter boundary only.
+PRIORITY_TO_JIRA: dict[str, str] = {
+    "P1": "Highest",
+    "P2": "High",
+    "P3": "Medium",
+    "P4": "Low",
+}
+JIRA_TO_PRIORITY: dict[str, str] = {v: k for k, v in PRIORITY_TO_JIRA.items()}
+
+#: Retired vocabularies, accepted on input so old rows, old clients and any
+#: seed data written before the rename still resolve instead of silently
+#: failing a comparison. Never emitted.
+_LEGACY_TO_PRIORITY: dict[str, str] = {"S1": "P1", "S2": "P2", "S3": "P3", "S4": "P4"}
+
+
+def to_priority(value: str | None) -> str:
+    """Normalise anything that means a priority band into P1–P4.
+
+    Accepts the canonical form, the retired S1–S4 severity codes, and Jira's
+    Highest/High/Medium/Low. Returns '' for anything unrecognised — callers
+    treat that as "not set" rather than guessing a band, because guessing here
+    is exactly how a P4 becomes a 3am page.
+    """
+    if not value:
+        return ""
+    raw = str(value).strip()
+    upper = raw.upper()
+    if upper in PRIORITY_TO_JIRA:
+        return upper
+    if upper in _LEGACY_TO_PRIORITY:
+        return _LEGACY_TO_PRIORITY[upper]
+    for jira_name, band in JIRA_TO_PRIORITY.items():
+        if jira_name.lower() == raw.lower():
+            return band
+    return ""
+
+
+def to_jira_priority(value: str | None) -> str:
+    """P1–P4 -> the Jira Priority name. '' if unset or unrecognised."""
+    return PRIORITY_TO_JIRA.get(to_priority(value), "")
+
+
+def priority_rank(value: str | None) -> int:
+    """1-based rank, worst first. 0 when unset — sorts unset rows last."""
+    band = to_priority(value)
+    return PRIORITY_ORDER.index(band) + 1 if band else 0
+
+
+# Retired alias. Kept only so an import of `Severity` does not break at load
+# time while the rename settles; it is the same P1–P4 literal, not a second
+# scale. Remove once nothing imports it.
+Severity = Priority
 
 
 class RAGDocument(BaseModel):
@@ -184,7 +258,7 @@ class TriageDecision(BaseModel):
     ticket_id: str
     category: str = ""
     subcategory: str = ""
-    severity: Severity = "S3"
+    severity: Priority = "P3"
     priority_score: int = Field(default=50, ge=0, le=100)
     assigned_team: Team = "ops"
     sla_target_mins: int = 0
