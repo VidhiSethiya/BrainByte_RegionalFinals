@@ -307,12 +307,14 @@ SEVERITY_ASSESS_PROMPT = (
     UNTRUSTED_DATA_NOTICE
     + """
 
-Assess the severity of this ticket strictly against the SLA policy and precedent
-resolution times in CONTEXT. This is the highest-stakes decision in the pipeline — a
-wrong Severity 1 pages an on-call at 3am and can breach a contractual SLA — so do not
-default upward "to be safe". Ground the severity in what CONTEXT actually says a
-failure of this shape costs; if CONTEXT is thin, say so in your reasoning and prefer
-the lower severity with lower confidence rather than a confident guess.
+Assess the Priority of this ticket strictly against the SLA policy and precedent
+resolution times in CONTEXT. Use the same names as Jira Priority
+(Highest / High / Medium / Low) — one vocabulary for TicketSphere and Jira.
+This is the highest-stakes decision in the pipeline — a wrong Highest pages an
+on-call at 3am and can breach a contractual SLA — so do not default upward "to be
+safe". Ground the Priority in what CONTEXT actually says a failure of this shape
+costs; if CONTEXT is thin, say so in your reasoning and prefer the lower Priority
+with lower confidence rather than a confident guess.
 
 <<<TICKET_DATA>>>
 {ticket_text}
@@ -323,21 +325,19 @@ CATEGORY: {category} / {subcategory}
 CONTEXT (SLA policy, precedent tickets with resolution times, escalation matrix):
 {context}
 
-Priority band definitions — do not deviate from these. They are the summary form of
-docs/PRIORITY_RULEBOOK.md; where the retrieved CONTEXT gives a specific SLA figure,
-CONTEXT wins over this summary:
-- P1: production down or data loss in progress, no workaround, breaches SLA within
-  the hour if unaddressed
-- P2: production significantly degraded, or a workaround exists but is costly
-- P3: production partially affected with a workaround, or a non-prod
+Priority definitions (Jira names) — do not deviate from these:
+- Highest: production down or data loss in progress, no workaround, breaches SLA
+  within the hour if unaddressed
+- High: production significantly degraded, or a workaround exists but is costly
+- Medium: production partially affected with a workaround, or a non-prod
   production-bound issue
-- P4: cosmetic, informational, or a request with no active failure
+- Low: cosmetic, informational, or a request with no active failure
 
 Return JSON only, matching this schema exactly (SeverityVerdict in rag/schemas.py):
 {{
-  "severity": "P1|P2|P3|P4",
+  "severity": "Highest|High|Medium|Low",
   "priority_score": 0-100,
-  "sla_target_mins": <integer, taken from the SLA policy for this severity>,
+  "sla_target_mins": <integer, taken from the SLA policy for this Priority>,
   "confidence": 0.0-1.0,
   "rationale": "<one or two sentences; cite [C#] for the SLA figure and any precedent used>"
 }}"""

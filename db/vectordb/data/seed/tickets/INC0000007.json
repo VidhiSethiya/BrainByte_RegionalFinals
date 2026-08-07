@@ -8,10 +8,10 @@
   "channel": "synthetic",
   "team": "aws",
   "category": "database",
-  "severity": "S3",
+  "severity": "Medium",
   "resolved": false,
   "resolution_minutes": null,
   "true_category": "database",
-  "true_severity": "S3",
+  "true_severity": "Medium",
   "true_team": "aws"
 }

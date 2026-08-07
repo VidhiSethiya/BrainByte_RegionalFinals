@@ -1,0 +1,9 @@
+Jury’s suggestion/ question
+
+How will ticket management ai system scale? If there are 500 ticktes per day how can it be scaled how much time does it take to sync and poll
+And how can me make it scalable in terms of increasing jira tickets/ incidents 
+
+
+Jury was very blatant about why jira why not servicenow, and how do you segregate the tickets on basis of priority severity using llms, and they did not understand the scoring, confidence score so optimize and explain it, also explain when human in loop will take place
+
+In chatbot we want the option to provide bulk apporval by manager for multiple tickets

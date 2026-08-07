@@ -28,7 +28,7 @@ from werkzeug.security import check_password_hash, generate_password_hash
 
 from config import settings
 from observability.telemetry import log
-from rag.schemas import to_jira_priority
+from rag.schemas import normalize_severity
 
 
 def _uuid() -> str:
@@ -267,7 +267,7 @@ class Ticket(Base):
     assignee = Column(String, default="")
     category = Column(String, default="")
     subcategory = Column(String, default="")
-    severity = Column(String, default="")  # P1-P4 (see rag/schemas.py::Priority)
+    severity = Column(String, default="")  # Jira Priority names: Highest|High|Medium|Low
     priority_score = Column(Integer, default=0)
     assigned_team = Column(String, default="")  # ops | azure | aws | gcp
     status = Column(String, default="new", index=True)
@@ -287,6 +287,8 @@ class Ticket(Base):
     updated_at = Column(DateTime, default=_now, onupdate=_now)
 
     def to_dict(self) -> dict:
+        from rag.schemas import normalize_severity
+
         return {
             "id": self.id,
             "external_id": self.external_id,
@@ -300,13 +302,7 @@ class Ticket(Base):
             "assignee": self.assignee,
             "category": self.category,
             "subcategory": self.subcategory,
-            # Serialised in Jira's Priority vocabulary (Highest/High/Medium/Low),
-            # which is what the frontend renders. Storage stays P1-P4 — see
-            # rag/schemas.py and docs/PRIORITY_RULEBOOK.md §3. Translating here
-            # keeps it to one choke point: to_dict() is the only serialisation
-            # path for this table, so every route gets it without repeating the
-            # conversion (and without a route quietly forgetting to).
-            "severity": to_jira_priority(self.severity),
+            "severity": normalize_severity(self.severity) if self.severity else "",
             "priority_score": self.priority_score,
             "assigned_team": self.assigned_team,
             "status": self.status,
@@ -315,7 +311,7 @@ class Ticket(Base):
             "overridden_by": self.overridden_by,
             "override_reason": self.override_reason,
             "true_category": self.true_category,
-            "true_severity": to_jira_priority(self.true_severity),
+            "true_severity": normalize_severity(self.true_severity) if self.true_severity else self.true_severity,
             "true_team": self.true_team,
             "held_out": self.held_out,
             "sync_attempts": self.sync_attempts,
@@ -400,17 +396,21 @@ def _migrate_sqlite_columns() -> None:
 
 
 def _migrate_severity_to_priority() -> None:
-    """Rewrite retired S1–S4 values to the canonical P1–P4 bands.
+    """Rewrite retired band values to the canonical Jira Priority names.
 
-    The product used to carry an S1–S4 "severity" scale alongside a separate
-    priority vocabulary; it now has one scale, P1–P4 (docs/PRIORITY_RULEBOOK.md).
-    Rows written before the rename still hold "S2"/"S3", and every comparison
-    against them — the queue filter, the analytics grouping, the auto-approve
-    band, the Jira Priority write-back — would silently stop matching rather
-    than fail loudly. Idempotent: after the first pass there is nothing to
-    update, so this costs one indexed UPDATE per boot and nothing else.
+    `tickets.severity` holds Highest/High/Medium/Low — the same vocabulary Jira,
+    the API and the console all speak. Two earlier vocabularies exist in rows
+    written before that settled: the original S1–S4 severity scale, and a
+    short-lived P1–P4 band. Neither matches on comparison any more, so the queue
+    filter, the analytics grouping, the auto-approve band and the Jira write-back
+    would all silently stop working on those rows rather than fail loudly.
+
+    Idempotent: after the first pass there is nothing left to update.
     """
-    mapping = {"S1": "P1", "S2": "P2", "S3": "P3", "S4": "P4"}
+    mapping = {
+        "S1": "Highest", "S2": "High", "S3": "Medium", "S4": "Low",
+        "P1": "Highest", "P2": "High", "P3": "Medium", "P4": "Low",
+    }
     columns = ("severity", "true_severity")
     with engine.begin() as conn:
         existing = {row[1] for row in conn.exec_driver_sql("PRAGMA table_info(tickets)").fetchall()}
@@ -420,13 +420,13 @@ def _migrate_severity_to_priority() -> None:
         for column in columns:
             if column not in existing:
                 continue
-            for old, new in mapping.items():
+            for old_value, new_value in mapping.items():
                 result = conn.exec_driver_sql(
-                    f"UPDATE tickets SET {column} = ? WHERE {column} = ?", (new, old)
+                    f"UPDATE tickets SET {column} = ? WHERE {column} = ?", (new_value, old_value)
                 )
                 moved += result.rowcount or 0
     if moved:
-        log.info("migrated %d ticket row(s) from S1-S4 to P1-P4", moved)
+        log.info("migrated %d ticket row(s) to Jira Priority names", moved)
 
 
 def init_db() -> None:

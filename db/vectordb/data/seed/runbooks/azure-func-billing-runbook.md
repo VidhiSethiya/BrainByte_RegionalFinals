@@ -10,4 +10,4 @@ Check dashboards, recent deploys, and error codes (ORA-01555, HTTP 502, KB503444
 Mitigate with rollback or scale-out; capture INC id.
 
 ## Escalate
-If S1 for >15m, page azure on-call.
+If Highest for >15m, page azure on-call.

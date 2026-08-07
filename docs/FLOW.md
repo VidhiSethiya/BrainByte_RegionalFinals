@@ -668,16 +668,17 @@ reads on load rather than re-running anything live.
 7. **Ten-node triage graph with a corrective loop** — normalise → enrich → grade →
    classify → assess → route → reflect → verify → gate → sync. Handoffs are validated
    typed objects, never prose, and both retry loops are capped at one so no unbounded
-   loop is reachable
-8. **The LLM never counts** — aggregate questions are answered by a deterministic SQL
-   tool and only narrated by the model, and priority is scored by arithmetic over a
-   published rubric rather than emitted as a number nobody can check
+   loop is reachable.
+8. **The LLM never counts** — aggregate questions ("how many Highest this week") are
+   answered by a deterministic SQL tool and only narrated by the model, and priority is
+   scored by arithmetic over a published rubric rather than emitted as a number nobody
+   can check
 9. **Priority is a rubric, not an opinion** — 15 named metrics on two axes, a priority
    matrix a reviewer can point at, and override rules for the facts that decide alone.
    Every rating carries the sentence that justified it, so disagreement is about
    evidence rather than about a mystery number
-10. **Nothing acts without a human** — P1 and low-confidence decisions are gated for
-   approval, the only write tool refuses unapproved decisions, a downgrade of a
+10. **Nothing acts without a human** — Highest-priority and low-confidence decisions are
+   gated for approval, the only write tool refuses unapproved decisions, a downgrade of a
    human-reported priority always needs approval even when an upgrade does not, and the
    system recommends a first action but never executes one
 

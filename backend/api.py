@@ -63,7 +63,7 @@ from rag.schemas import (
     LoginRequest,
     OverrideRequest,
     TicketIngestRequest,
-    to_priority,
+    normalize_severity,
 )
 
 api_bp = Blueprint("api", __name__)
@@ -538,14 +538,13 @@ def _scope_ticket_query(query, user: dict):
 def _normalize_ticket_filters(params):
     """Normalise `filter[severity]` to the canonical P1–P4 band.
 
-    The column stores P1–P4 (docs/PRIORITY_RULEBOOK.md). `to_priority()` also
-    accepts the retired S1–S4 codes and Jira's Highest/High/Medium/Low, so a
-    bookmarked URL or an older client still resolves instead of silently
-    returning an empty list — which is exactly what happened when the frontend
-    moved to a new vocabulary and nothing translated at the boundary."""
+    The column stores Jira's Priority names. `normalize_severity()` also accepts
+    the retired S1–S4 codes and case variants, so a bookmarked URL or an older
+    client still resolves instead of silently returning an empty list — which is
+    exactly what happened when the two layers disagreed about the vocabulary."""
     raw = params.filters.get("severity")
     if raw:
-        params.filters["severity"] = to_priority(raw) or raw
+        params.filters["severity"] = normalize_severity(raw) or raw
     return params
 
 
@@ -640,12 +639,17 @@ def override_ticket(ticket_id: str):
         if _scope_ticket_query(s.query(Ticket).filter_by(id=ticket_id), g.user).first() is None:
             return fail("not_found", "Ticket not found", 404)
 
-        # Normalise the band on the way in. The column stores P1–P4; a client
-        # sending a retired S-code or a Jira Priority name still lands correctly
-        # instead of writing a string nothing downstream can match.
         new_value = payload.new_value
         if payload.field == "severity":
-            new_value = to_priority(str(new_value)) or new_value
+            from integrations.jira import normalize_priority
+
+            new_value = normalize_priority(str(payload.new_value))
+            if new_value not in ("Highest", "High", "Medium", "Low"):
+                return fail(
+                    "validation_error",
+                    "Priority must be Highest, High, Medium, or Low",
+                    422,
+                )
 
         setattr(row, payload.field, new_value)
         row.overridden_by = g.user["id"]
@@ -658,7 +662,7 @@ def override_ticket(ticket_id: str):
             user_id=g.user["id"],
             resource=ticket_id,
             field=payload.field,
-            new_value=payload.new_value,
+            new_value=new_value,
             reason=payload.reason,
         )
         # Feeds the eval set the same way a chat thumbs-down does — a message_id
@@ -668,7 +672,7 @@ def override_ticket(ticket_id: str):
                 message_id=ticket_id,
                 user_id=g.user["id"],
                 rating=-1,
-                comment=f"override {payload.field} -> {payload.new_value}: {payload.reason}",
+                comment=f"override {payload.field} -> {new_value}: {payload.reason}",
             )
         )
         s.commit()
@@ -695,12 +699,14 @@ def approve_ticket(ticket_id: str):
         if not row:
             return fail("not_found", "Ticket not found", 404)
 
-        severity = (row.severity or "").strip()
+        from integrations.jira import normalize_priority
+
+        severity = normalize_priority((row.severity or "").strip())
         assigned_team = (row.assigned_team or "").strip()
         if not severity or not assigned_team:
             return fail(
                 "not_ready",
-                "Ticket has no triage decision yet (severity/team empty). "
+                "Ticket has no triage decision yet (priority/team empty). "
                 "Wait for a successful triage or re-sync before approving.",
                 409,
             )
@@ -711,6 +717,7 @@ def approve_ticket(ticket_id: str):
                 409,
             )
 
+        row.severity = severity
         row.status = "approved"
         s.commit()
         s.refresh(row)
@@ -744,15 +751,10 @@ def approve_ticket(ticket_id: str):
         )
     else:
         try:
-            from integrations.jira import priority_group
-
             source = tools.get_ticket_source()
-            pgroup = priority_group(severity)
-            if not pgroup:
-                raise ValueError(f"severity {severity!r} has no Jira Priority group")
             source.add_comment(
                 external_id,
-                f"TicketSphere: {severity} · Priority {pgroup} · {assigned_team} · "
+                f"TicketSphere: {severity} · {assigned_team} · "
                 f"confidence {confidence:.0%}. "
                 f"Approved by {g.user.get('username', g.user['id'])}.",
             )

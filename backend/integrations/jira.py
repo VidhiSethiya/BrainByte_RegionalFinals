@@ -28,7 +28,6 @@ import httpx
 from config import settings
 from integrations.ticket_source import TicketSource
 from observability.telemetry import log
-from rag.schemas import PRIORITY_TO_JIRA, to_jira_priority
 
 MAX_RETRIES = 3
 BACKOFF_BASE_SECONDS = 1.5
@@ -45,22 +44,37 @@ STATUS_TO_TRANSITION_NAME: dict[str, str] = {
     "resolved": "Done",
 }
 
-# Four Priority groups in declining order — stock Jira Software names on the
-# TicketSphere SCRUM board. The mapping itself is canonical and lives in
-# rag/schemas.py, because the UI and the analytics payload need the same table
-# and a second copy here is exactly how two call sites drift apart (which already
-# happened once with issue_to_ticket_dict). This module keeps the name that the
-# rest of the Jira code and api.py already import.
-SEVERITY_TO_PRIORITY_NAME = PRIORITY_TO_JIRA
+# Urgency values = stock Jira Priority names (identity write-back).
+# Legacy S1–S4 still accepted for older SQLite rows.
+LEGACY_S_TO_JIRA: dict[str, str] = {
+    "S1": "Highest",
+    "S2": "High",
+    "S3": "Medium",
+    "S4": "Low",
+}
+JIRA_PRIORITY_NAMES = ("Highest", "High", "Medium", "Low")
+_PRIORITY_SET = frozenset(JIRA_PRIORITY_NAMES)
 
 
-def priority_group(priority: str | None) -> str:
-    """Map a TicketSphere band (P1–P4) to its Jira Priority name.
+def normalize_priority(value: str | None) -> str:
+    """Map legacy S1–S4 onto Jira Priority names; pass through known names."""
+    if not value:
+        return ""
+    raw = str(value).strip()
+    if raw in _PRIORITY_SET:
+        return raw
+    upper = raw.upper()
+    if upper in LEGACY_S_TO_JIRA:
+        return LEGACY_S_TO_JIRA[upper]
+    for name in JIRA_PRIORITY_NAMES:
+        if name.lower() == raw.lower():
+            return name
+    return raw
 
-    This adapter is the ONLY place the words Highest/High/Medium/Low appear —
-    they are Jira's field vocabulary, not the product's. Everything upstream
-    speaks P1–P4."""
-    return to_jira_priority(priority)
+
+def priority_group(severity: str | None) -> str:
+    """Return a stock Jira Priority name for write-back (identity after normalize)."""
+    return normalize_priority(severity)
 
 
 class JiraError(RuntimeError):
@@ -176,16 +190,10 @@ class JiraSource(TicketSource):
     # exist as custom fields — they were a BLUEPRINT.md §7 suggestion, never
     # actually created in Jira admin.
     #
-    # Rather than block write-back on someone creating four custom fields, this
-    # writes onto what the board already has, today, with zero admin setup:
-    #   severity        -> native Priority by name (4 groups declining):
-    #                      S1→Highest, S2→High, S3→Medium, S4→Low
-    #   team/severity   -> labels — team as a short board code (AWS/AZR/GCP/OPS,
-    #                      matching how the rest of the org already tags issues),
-    #                      severity as ticketsphere-severity-<x>
-    #   everything      -> the rationale comment (see add_comment / approve route)
-    # JIRA_FIELD_* stay honoured *additionally* if a team later adds real custom
-    # fields — set is set, but nothing here depends on them existing.
+    # TicketSphere urgency uses the same names as Jira Priority
+    # (Highest/High/Medium/Low). The DB/API field is still called `severity`;
+    # write-back is an identity map onto native Priority + a priority label.
+    # JIRA_FIELD_* stay honoured *additionally* if custom fields exist later.
 
     _TEAM_TO_LABEL = {"aws": "AWS", "azure": "AZR", "gcp": "GCP", "ops": "OPS"}
 
@@ -195,11 +203,10 @@ class JiraSource(TicketSource):
 
         severity = fields.get("severity")
         if severity:
-            # Prefer name over hardcoded ids — names are stable across sites.
             pname = priority_group(str(severity))
             if pname:
                 set_fields["priority"] = {"name": pname}
-            label_adds.append(f"ticketsphere-severity-{severity}")
+                label_adds.append(f"ticketsphere-priority-{pname}")
 
         team = fields.get("assigned_team")
         if team:
