@@ -173,7 +173,7 @@ export function normalizeSeverity(value: string | null | undefined): Severity | 
 }
 export type Team = "ops" | "azure" | "aws" | "gcp";
 export type TicketStatus =
-  | "new" | "triaged" | "awaiting_approval" | "routed" | "synced" | "failed" | "resolved";
+  | "new" | "triaged" | "awaiting_approval" | "approved" | "routed" | "synced" | "failed" | "resolved";
 
 export interface TicketRow {
   id: string;
@@ -189,7 +189,7 @@ export interface TicketRow {
   severity: Severity | "";
   priority_score: number;           // 0–100
   assigned_team: Team | "" | null;
-  status: TicketStatus | "approved" | string;
+  status: TicketStatus | string;
   confidence: number;               // 0–1
   needs_human: boolean;
   /** Optional — live Ticket.to_dict does not send SLA fields. */

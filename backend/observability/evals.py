@@ -27,7 +27,7 @@ from db.sqlite.models import Ticket as TicketRow
 from guardrails.validators import validate_json
 from observability.telemetry import log
 from rag.rag_retriever import build_context, retrieve
-from rag.schemas import PRIORITY_ORDER, ChatRequest, EvalScore, GroundednessVerdict
+from rag.schemas import ChatRequest, EvalScore, GroundednessVerdict
 
 # TicketSphere eval set — include refusals so guardrails are visibly exercised.
 EVAL_SET: list[dict] = [
@@ -270,11 +270,7 @@ def _persist(scores: list[EvalScore]) -> None:
 # from EVAL_SET above — this scores the *triage graph*
 # (ai.agents.run_triage/ingest_and_triage), not retrieval-augmented chat.
 
-<<<<<<< HEAD
-SEVERITY_ORDER = {b: i + 1 for i, b in enumerate(PRIORITY_ORDER)}
-=======
 SEVERITY_ORDER = {"Highest": 1, "High": 2, "Medium": 3, "Low": 4}
->>>>>>> origin/main
 
 
 def score_triage_accuracy(

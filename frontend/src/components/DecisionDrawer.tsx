@@ -49,7 +49,6 @@ import {
   type Team,
   type TicketDetail,
   type TicketStatus,
-  type TimelineEvent,
 } from "../api/client";
 import SeverityTag, {
   ConfidenceMeter,

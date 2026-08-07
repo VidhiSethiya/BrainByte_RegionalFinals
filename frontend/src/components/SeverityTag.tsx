@@ -29,6 +29,12 @@ export const STATUS = {
   new: { label: "New", color: "default" },
   triaged: { label: "Triaged", color: "processing" },
   awaiting_approval: { label: "Needs review", color: "warning" },
+  // Set by POST /tickets/<id>/approve, between the manager's click and the Jira
+  // write-back landing. Without an entry here StatusTag fell through to its
+  // raw-string fallback and rendered an unstyled "approved" chip — visible in the
+  // demo's approval beat, since a ticket sits in this state until sync completes
+  // (and stays here permanently if the sync fails).
+  approved: { label: "Approved", color: "success" },
   routed: { label: "Routed", color: "processing" },
   synced: { label: "Synced", color: "success" },
   resolved: { label: "Resolved", color: "success" },

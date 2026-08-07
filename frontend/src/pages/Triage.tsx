@@ -263,7 +263,7 @@ function BulkTriage() {
         type="info"
         showIcon
         message="Bulk triage is not available on the live backend yet"
-        description="Use Live triage for a single ticket, or Control Tower ? Sync Now to pull Jira issues. The /tickets/bulk route ships in a later phase."
+        description="Use Live triage for a single ticket, or Control Tower → Sync Now to pull Jira issues. The /tickets/bulk route ships in a later phase."
       />
     </Card>
   );

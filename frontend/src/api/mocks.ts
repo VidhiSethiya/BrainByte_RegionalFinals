@@ -145,7 +145,7 @@ const TICKETS: TicketRow[] = SEEDS.map((seed, index) => {
 });
 
 /** Closed means the work is done. A failed sync is unfinished work, not history. */
-const CLOSED_STATUSES: TicketStatus[] = ["resolved", "synced"];
+const CLOSED_STATUSES: string[] = ["resolved", "synced"];
 
 // --- decisions, evidence, timelines -----------------------------------------
 
@@ -181,10 +181,10 @@ function decisionFor(ticket: TicketRow): TriageDecision {
     ticket_id: ticket.id,
     category: ticket.category,
     subcategory: `${ticket.category} / ${ticket.environment}`,
-    severity: ticket.severity,
+    severity: ticket.severity || "Medium",
     priority_score: ticket.priority_score,
     assigned_team: (ticket.assigned_team ?? "ops") as Team,
-    sla_target_mins: ticket.sla_target_mins,
+    sla_target_mins: ticket.sla_target_mins ?? 0,
     confidence: ticket.confidence,
     rationale:
       `The ticket describes **${ticket.category.toLowerCase()}** symptoms on *${ticket.application}* ` +
@@ -474,8 +474,8 @@ function analytics(): TriageAnalytics {
         field: reroute ? "assigned_team" : "severity",
         // A team override moves a team, a severity override moves a severity —
         // the two never share a value space.
-        from: reroute ? PREVIOUS_TEAM[t.assigned_team ?? "ops"] : t.severity,
-        to: reroute ? TEAM_LABEL_MOCK[t.assigned_team ?? "ops"] : t.severity === "Low" ? "Medium" : "High",
+        from: reroute ? PREVIOUS_TEAM[t.assigned_team || "ops"] : t.severity,
+        to: reroute ? TEAM_LABEL_MOCK[t.assigned_team || "ops"] : t.severity === "Low" ? "Medium" : "High",
         by: t.overridden_by!,
         reason: t.override_reason!,
         at: iso(120 + index * 240),
