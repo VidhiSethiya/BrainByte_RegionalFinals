@@ -49,13 +49,14 @@ class Settings:
     OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "ollama")
     OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "http://localhost:11434/v1")
     LLM_MODEL = os.getenv("LLM_MODEL", "llama-3.2-3b-it:latest")       # standard tier
-    FAST_LLM_MODEL = os.getenv("FAST_LLM_MODEL", LLM_MODEL)            # fast tier
-    REASONING_MODEL = os.getenv("REASONING_MODEL", LLM_MODEL)          # deep tier
-    EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "gte-large:latest")
+    FAST_LLM_MODEL = os.getenv("FAST_LLM_MODEL", LLM_MODEL)
+    # Hosted embedding default — changing this invalidates Chroma; reseed after swap.
+    EMBEDDING_MODEL = os.getenv(
+        "EMBEDDING_MODEL", "azure/genailab-maas-text-embedding-3-large"
+    )
     # Vision-capable model for images / scanned pages. Empty disables the vision path.
     VISION_MODEL = os.getenv("VISION_MODEL", "").strip()
-    # Speech-to-text for POST /api/voice/transcribe. Empty disables the endpoint; the
-    # frontend's mic button hides itself rather than erroring (see FRONTEND_SPEC §10).
+    REASONING_MODEL = os.getenv("REASONING_MODEL", "").strip()
     WHISPER_MODEL = os.getenv("WHISPER_MODEL", "").strip()
     LLM_TEMPERATURE = _float("LLM_TEMPERATURE", 0.1)
     LLM_TIMEOUT_SECONDS = _int("LLM_TIMEOUT_SECONDS", 60)
@@ -80,11 +81,10 @@ class Settings:
     SEED_DIR = _path("SEED_DIR", "seed", VECTOR_DIR)
 
     # --- retrieval ---
-    # "vector" = embedding similarity only (the default).
-    # "hybrid" = vector + BM25 keyword, fused with RRF, then optionally reranked.
-    # Decide on build day: hybrid earns its keep only when the corpus carries exact
-    # identifiers (contract/policy/part numbers) that embeddings blur.
-    RETRIEVAL_MODE = os.getenv("RETRIEVAL_MODE", "vector").strip().lower()
+    # TicketSphere: hybrid is the earned default — INC/error codes need BM25.
+    # "vector" remains available for A/B; set winner in .env after eval.
+    RETRIEVAL_MODE = os.getenv("RETRIEVAL_MODE", "hybrid").strip().lower()
+    TICKET_SOURCE = os.getenv("TICKET_SOURCE", "synthetic").strip().lower()
     CHUNK_SIZE = _int("CHUNK_SIZE", 900)
     CHUNK_OVERLAP = _int("CHUNK_OVERLAP", 150)
     RETRIEVE_TOP_K = _int("RETRIEVE_TOP_K", 20)
@@ -111,11 +111,10 @@ class Settings:
     FLASK_DEBUG = _bool("FLASK_DEBUG", True)
     FRONTEND_DIST = REPO_ROOT / "frontend" / "dist"
 
-    # --- domain (filled by the guide-me blueprint) ---
-    DOMAIN = os.getenv(
-        "DOMAIN", "IT service management — application maintenance ticket triage"
-    )
-    ROLES = ["admin", "analyst", "viewer"]  # [PLACEHOLDER: DOMAIN_ROLES]
+    # --- domain (TicketSphere) ---
+    DOMAIN = os.getenv("DOMAIN", "TicketSphere")
+    ROLES = ["admin", "manager", "engineer", "viewer"]
+    TEAMS = ["ops", "azure", "aws", "gcp"]
 
     def ensure_dirs(self) -> None:
         for d in (SQLITE_DIR, VECTOR_DIR, self.CHROMA_PERSIST_DIR, self.UPLOAD_DIR, self.SEED_DIR):

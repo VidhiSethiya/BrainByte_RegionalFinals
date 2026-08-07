@@ -20,6 +20,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    UniqueConstraint,
     create_engine,
 )
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
@@ -50,8 +51,9 @@ class User(Base):
     username = Column(String, unique=True, nullable=False, index=True)
     password_hash = Column(String, nullable=False)
     role = Column(String, nullable=False, default="viewer")
-    # Clearance tags matched against a document's `allowed_roles`/`tags` metadata at
-    # query time. [PLACEHOLDER: DOMAIN_CLEARANCE_TAGS]
+    # Clearance tags matched against chunk `acl_<tag>` metadata at query time.
+    # Team membership rides here: engineer clearances are one of ops|azure|aws|gcp;
+    # manager/admin use ["all"].
     clearances = Column(JSON, nullable=False, default=list)
     created_at = Column(DateTime, default=_now)
 
@@ -84,7 +86,8 @@ class Document(Base):
     sensitivity = Column(String, nullable=False, default="internal")
     chunk_count = Column(Integer, default=0)
     status = Column(String, default="indexed")  # indexed | failed | pending
-    # [PLACEHOLDER: DOMAIN_DOCUMENT_ATTRIBUTES] e.g. department, contract_id, patient_id
+    # TicketSphere Chroma attrs mirrored for the KB table: doc_type, team, service,
+    # environment, category, severity, resolved, resolution_minutes.
     attributes = Column(JSON, nullable=False, default=dict)
     uploaded_by = Column(String, ForeignKey("users.id"), nullable=True)
     created_at = Column(DateTime, default=_now, index=True)
@@ -240,17 +243,128 @@ class EvalResult(Base):
         }
 
 
+class Ticket(Base):
+    """Operational ticket record — gold labels stay here, never in chunk text."""
+
+    __tablename__ = "tickets"
+    __table_args__ = (UniqueConstraint("source", "external_id", name="uq_ticket_source_ext"),)
+
+    id = Column(String, primary_key=True, default=_uuid)
+    external_id = Column(String, nullable=False, index=True)
+    source = Column(String, nullable=False, default="synthetic")  # jira | synthetic | manual
+    title = Column(String, nullable=False, default="")
+    body_masked = Column(Text, nullable=False, default="")
+    application = Column(String, default="")
+    environment = Column(String, default="prod")  # prod | uat | dev
+    channel = Column(String, default="")
+    category = Column(String, default="")
+    subcategory = Column(String, default="")
+    severity = Column(String, default="")  # S1–S4
+    priority_score = Column(Integer, default=0)
+    assigned_team = Column(String, default="")  # ops | azure | aws | gcp
+    status = Column(String, default="new", index=True)
+    # new → triaged → awaiting_approval → routed → synced | failed
+    confidence = Column(Float, default=0.0)
+    needs_human = Column(Boolean, default=False)
+    overridden_by = Column(String, ForeignKey("users.id"), nullable=True)
+    override_reason = Column(Text, default="")
+    # Gold labels for held-out accuracy — stripped from indexed text.
+    true_category = Column(String, nullable=True)
+    true_severity = Column(String, nullable=True)
+    true_team = Column(String, nullable=True)
+    held_out = Column(Boolean, default=False, index=True)
+    sync_attempts = Column(Integer, default=0)
+    last_error = Column(Text, default="")
+    created_at = Column(DateTime, default=_now, index=True)
+    updated_at = Column(DateTime, default=_now, onupdate=_now)
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "external_id": self.external_id,
+            "source": self.source,
+            "title": self.title,
+            "body_masked": self.body_masked,
+            "application": self.application,
+            "environment": self.environment,
+            "channel": self.channel,
+            "category": self.category,
+            "subcategory": self.subcategory,
+            "severity": self.severity,
+            "priority_score": self.priority_score,
+            "assigned_team": self.assigned_team,
+            "status": self.status,
+            "confidence": self.confidence,
+            "needs_human": self.needs_human,
+            "overridden_by": self.overridden_by,
+            "override_reason": self.override_reason,
+            "true_category": self.true_category,
+            "true_severity": self.true_severity,
+            "true_team": self.true_team,
+            "held_out": self.held_out,
+            "sync_attempts": self.sync_attempts,
+            "last_error": self.last_error,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
+class TriageRun(Base):
+    """One agent execution per ticket — model, cost, full TriageDecision JSON."""
+
+    __tablename__ = "triage_runs"
+
+    id = Column(String, primary_key=True, default=_uuid)
+    ticket_id = Column(String, ForeignKey("tickets.id"), nullable=False, index=True)
+    decision_json = Column(JSON, nullable=False, default=dict)
+    model = Column(String, default="")
+    tier = Column(String, default="standard")  # fast | standard | deep
+    tokens = Column(Integer, default=0)
+    cost_usd = Column(Float, default=0.0)
+    latency_ms = Column(Integer, default=0)
+    trace_id = Column(String, default="", index=True)
+    guardrails_fired = Column(JSON, default=list)
+    created_at = Column(DateTime, default=_now, index=True)
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "ticket_id": self.ticket_id,
+            "decision_json": self.decision_json or {},
+            "model": self.model,
+            "tier": self.tier,
+            "tokens": self.tokens,
+            "cost_usd": self.cost_usd,
+            "latency_ms": self.latency_ms,
+            "trace_id": self.trace_id,
+            "guardrails_fired": self.guardrails_fired or [],
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
 engine = create_engine(settings.DATABASE_URL, future=True)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
 
 
+_DEMO_USERS = [
+    ("admin", "admin123", "admin", ["all"]),
+    ("manager", "manager123", "manager", ["all"]),
+    ("ops1", "ops123", "engineer", ["ops"]),
+    ("azure1", "azure123", "engineer", ["azure"]),
+    ("aws1", "aws123", "engineer", ["aws"]),
+    ("gcp1", "gcp123", "engineer", ["gcp"]),
+]
+
+
 def init_db() -> None:
-    """Create tables and a demo admin. Safe to call on every boot."""
+    """Create tables and TicketSphere demo users. Safe to call on every boot."""
     settings.ensure_dirs()
     Base.metadata.create_all(engine)
     with SessionLocal() as s:
-        if not s.query(User).filter_by(username="admin").first():
-            admin = User(username="admin", role="admin", clearances=["all"])
-            admin.set_password("admin123")  # demo credentials — change before a real deploy
-            s.add(admin)
-            s.commit()
+        for username, password, role, clearances in _DEMO_USERS:
+            if s.query(User).filter_by(username=username).first():
+                continue
+            user = User(username=username, role=role, clearances=list(clearances))
+            user.set_password(password)
+            s.add(user)
+        s.commit()

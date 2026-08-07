@@ -14,9 +14,25 @@ from config import settings
 from guardrails.governance.access_control import acl_metadata
 from rag.schemas import Chunk, RAGDocument
 
-# Separator order matters: paragraph -> line -> sentence -> word.
-# [PLACEHOLDER: add domain separators, e.g. "\nSECTION ", "\nCLAUSE " for contracts]
-_SEPARATORS = ["\n\n", "\n", ". ", " ", ""]
+# Separator order matters: prefer ticket/runbook section boundaries first so a
+# chunk never splits mid-## Fix / mid-Logs / mid-Environment.
+_SEPARATORS = [
+    "\n--- ticket ",
+    "\n## Symptom",
+    "\n## Diagnosis",
+    "\n## Fix",
+    "\n## Escalate",
+    "\n## ",
+    "\nSteps to reproduce",
+    "\nEnvironment",
+    "\nLogs",
+    "\nResolution",
+    "\n\n",
+    "\n",
+    ". ",
+    " ",
+    "",
+]
 
 _splitter = RecursiveCharacterTextSplitter(
     chunk_size=settings.CHUNK_SIZE,

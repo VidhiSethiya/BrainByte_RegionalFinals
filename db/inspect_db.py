@@ -38,6 +38,8 @@ except Exception:  # noqa: BLE001 - deps missing is fine; defaults above still w
 PREVIEW = {
     "users": "username, role, clearances",
     "documents": "filename, modality, sensitivity, chunk_count, status",
+    "tickets": "external_id, severity, assigned_team, status, held_out",
+    "triage_runs": "ticket_id, tier, model, latency_ms",
     "chat_sessions": "title, substr(coalesce(summary,''), 1, 60)",
     "chat_messages": "role, substr(content, 1, 70), groundedness",
     "audit_log": "action, resource, created_at",

@@ -5,6 +5,7 @@ Defined once here and imported everywhere. Do not redeclare a shape in a route.
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
@@ -19,6 +20,18 @@ class LoginRequest(BaseModel):
 
 # --- ingestion / documents --------------------------------------------------
 
+DocType = Literal[
+    "ticket_history",
+    "runbook",
+    "service_catalog",
+    "sla_policy",
+    "escalation_matrix",
+]
+Team = Literal["ops", "azure", "aws", "gcp"]
+Severity = Literal["S1", "S2", "S3", "S4"]
+Environment = Literal["prod", "uat", "dev"]
+TicketSource = Literal["jira", "synthetic", "manual"]
+
 
 class RAGDocument(BaseModel):
     """A source document before chunking."""
@@ -31,7 +44,8 @@ class RAGDocument(BaseModel):
     # Governance metadata — enforced at query time, not after retrieval.
     allowed_roles: list[str] = Field(default_factory=lambda: ["admin"])
     sensitivity: Literal["public", "internal", "confidential", "restricted"] = "internal"
-    # [PLACEHOLDER: DOMAIN_DOCUMENT_ATTRIBUTES]
+    # Filterable Chroma attributes (TicketSphere): doc_type, team, service,
+    # environment, category, severity, resolved, resolution_minutes.
     attributes: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -139,32 +153,153 @@ class GuardrailResult(BaseModel):
     findings: list[dict[str, Any]] = Field(default_factory=list)
 
 
-# --- domain artifacts -------------------------------------------------------
-# [PLACEHOLDER: rename these two to the actual entities in the problem statement.
-#  They exist so the ingest -> anonymize -> structure -> index pipeline has a
-#  concrete typed output rather than passing dicts around.]
+# --- domain artifacts (TicketSphere) ----------------------------------------
 
 
-class AnonymizedRecord(BaseModel):
-    """Raw input after PII removal — what actually gets embedded."""
+class Ticket(BaseModel):
+    """Ticket after PII/secret scrubbing — what gets embedded / triaged."""
 
     id: str
-    original_filename: str
-    text: str
+    external_id: str = ""
+    source: TicketSource = "manual"
+    title: str = ""
+    body_masked: str = ""
+    reporter_token: str = ""
+    application: str = ""
+    environment: Environment | str = "prod"
+    channel: str = ""
+    attachments: list[str] = Field(default_factory=list)
+    raw: dict[str, Any] = Field(default_factory=dict)
     tokens_replaced: dict[str, str] = Field(default_factory=dict)
-    # [PLACEHOLDER: DOMAIN_RECORD_FIELDS]
+    created_at: datetime | None = None
 
 
-class GeneratedReport(BaseModel):
-    """Structured artifact the system produces for the user."""
+# Backward-compatible alias for ingest helpers that still say "anonymized record".
+AnonymizedRecord = Ticket
 
-    id: str
-    title: str
-    summary: str
-    findings: list[str] = Field(default_factory=list)
-    recommendations: list[str] = Field(default_factory=list)
-    citations: list[Citation] = Field(default_factory=list)
-    # [PLACEHOLDER: DOMAIN_REPORT_FIELDS e.g. severity, risk_score, owner]
+
+class TriageDecision(BaseModel):
+    """Structured triage output the agent graph produces for a ticket."""
+
+    ticket_id: str
+    category: str = ""
+    subcategory: str = ""
+    severity: Severity = "S3"
+    priority_score: int = Field(default=50, ge=0, le=100)
+    assigned_team: Team = "ops"
+    sla_target_mins: int = 0
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    rationale: str = ""
+    evidence: list[Citation] = Field(default_factory=list)
+    duplicate_of: str | None = None
+    suggested_first_action: str = ""
+    needs_human: bool = False
+    escalation_reason: str = ""
+
+
+# Backward-compatible alias.
+GeneratedReport = TriageDecision
+
+
+class TicketIngestRequest(BaseModel):
+    """Inbound ticket payload before normalisation / triage."""
+
+    external_id: str | None = None
+    source: TicketSource = "manual"
+    title: str = Field(min_length=1, max_length=500)
+    body: str = Field(min_length=1, max_length=50_000)
+    application: str = ""
+    environment: Environment | str = "prod"
+    channel: str = "api"
+    attachments: list[str] = Field(default_factory=list)
+    reporter: str = ""
+    raw: dict[str, Any] = Field(default_factory=dict)
+
+
+class OverrideRequest(BaseModel):
+    """Manager/engineer override — reason is mandatory."""
+
+    field: Literal["severity", "assigned_team", "category", "priority_score", "status"]
+    new_value: str | int
+    reason: str = Field(min_length=3, max_length=2000)
+
+
+class TriageVerdict(BaseModel):
+    """LLM JSON: category + subcategory + affected service."""
+
+    category: str
+    subcategory: str = ""
+    service: str = ""
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    rationale: str = ""
+
+
+class SeverityVerdict(BaseModel):
+    """LLM JSON: severity + priority grounded in SLA / precedent."""
+
+    severity: Severity
+    priority_score: int = Field(ge=0, le=100)
+    sla_target_mins: int = 0
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    rationale: str = ""
+
+
+class RoutingVerdict(BaseModel):
+    """LLM JSON: owning team from catalogue ⊕ capacity."""
+
+    assigned_team: Team
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    rationale: str = ""
+
+
+class DuplicateVerdict(BaseModel):
+    """LLM JSON: whether this ticket duplicates an open/resolved one."""
+
+    is_duplicate: bool = False
+    duplicate_of: str | None = None
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    rationale: str = ""
+
+
+class TicketStats(BaseModel):
+    """Deterministic SQL aggregate — narrated by the manager chatbot, never invented."""
+
+    total: int = 0
+    by_severity: dict[str, int] = Field(default_factory=dict)
+    by_team: dict[str, int] = Field(default_factory=dict)
+    by_status: dict[str, int] = Field(default_factory=dict)
+    sla_at_risk: int = 0
+    awaiting_approval: int = 0
+    from_date: str | None = None
+    to_date: str | None = None
+
+
+class ReflectionVerdict(BaseModel):
+    """Self-critique of an assembled TriageDecision against cited evidence."""
+
+    pass_check: bool = True
+    lower_confidence_to: float | None = None
+    issues: list[str] = Field(default_factory=list)
+    retry_enrich: bool = False
+    rationale: str = ""
+
+
+class ChunkGradeVerdict(BaseModel):
+    """CRAG grader JSON — keep / drop / ask for rewrite+re-retrieve."""
+
+    action: Literal["keep", "filter", "rewrite"] = "keep"
+    keep_labels: list[str] = Field(default_factory=list)
+    rewrite_query: str | None = None
+    reason: str = ""
+
+
+class GradeResult(BaseModel):
+    """Return shape of `grade_chunks` for the agents team's CRAG node."""
+
+    chunks: list[RetrievedChunk] = Field(default_factory=list)
+    action: Literal["keep", "filter", "rewrite", "none"] = "keep"
+    rewrite_query: str | None = None
+    reason: str = ""
 
 
 # --- evals ------------------------------------------------------------------

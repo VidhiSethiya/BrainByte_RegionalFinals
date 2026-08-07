@@ -5,6 +5,9 @@ PDFs are the interesting case: a page with almost no extractable text is a scan 
 diagram, so it is rendered and sent to a vision model instead of being silently
 indexed as an empty chunk. That single rule is what makes retrieval work on real
 enterprise document sets.
+
+Vision model id comes only from `settings.VISION_MODEL` (config.py) — never hard-coded.
+TicketSphere uses this for runbook PDFs and ~20 error/console screenshots in the seed.
 """
 
 from __future__ import annotations
