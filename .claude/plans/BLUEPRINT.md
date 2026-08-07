@@ -323,7 +323,14 @@ account being provisioned — build against the interface, decide the source at 
 
 ## 8. Frontend
 
-Two login surfaces, six protected screens, all in the locked design language
+> **Owned by Trapti, working solo in Windsurf.** The buildable detail — design brief,
+> theme object, `index.css`, API types, file map, per-screen specs, component contracts,
+> build order and definition of done — lives in **`../../frontend/FRONTEND_SPEC.md`**, with
+> the hard constraints mirrored into `.windsurf/rules/frontend.md` so Windsurf loads them
+> automatically on any file under `frontend/`. What follows here is the summary; that file
+> is the contract. **Keep the two in sync — if an API shape changes, change it there.**
+
+Two login surfaces, seven protected screens, all in the locked design language
 (`references/frontend-design.md`) — warm cream ground, clay `#A84A4D` actions, teal
 `#4A7C82` info, ochre `#B08D57` attention, 4px/8px geometry, light mode only. **No new
 colours are introduced for severity** — S1 maps to error, S2 to warning, S3 to info, S4
@@ -432,7 +439,8 @@ with 5 people, parallelise along the ⇉ markers.
 | 0.2 | Add model tiers + `TEAMS` + `ROLES` to config; `get_llm(tier=…)` | `config.py`, `ai/llm.py` | Deep and fast tiers both answer a ping |
 | 0.3 | Reseed Chroma against `text-embedding-3-large` (dimension change — must be a reset) | `db/vectordb/seed_vector_db.py --reset` | `indexed_chunks > 0`, no dimension error |
 | 0.4 | Seed the five demo users | `db/sqlite/models.py::init_db` | All five log in, JWT carries role + clearances |
-| 0.5 ⇉ | Mirror this blueprint into `.cursor/plan.md` and `.cursor/rules/` for the Cursor teammate | `.cursor/` | Teammate can pick up a phase without asking |
+| 0.5 ⇉ | Frontend handoff: `../../frontend/FRONTEND_SPEC.md` + `.windsurf/rules/frontend.md` reviewed with Trapti; mock layer (`VITE_USE_MOCKS`) landed so the UI is unblocked by the backend | `.claude/plans/`, `.windsurf/`, `frontend/src/api/mocks.ts` | Trapti can build every screen with the backend switched off |
+| 0.6 ⇉ | Mirror the blueprint into `.cursor/plan.md` if anyone is on Cursor | `.cursor/` | Teammate can pick up a phase without asking |
 
 ### Phase 1 — Vertical slice (1–5h)
 
