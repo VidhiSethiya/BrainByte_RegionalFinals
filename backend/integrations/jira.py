@@ -166,10 +166,26 @@ class JiraSource(TicketSource):
     # --- write-back ----------------------------------------------------------
     #
     # Verified against the real board (project SCRUM, "TicketSphere", team-managed
-    # Software project): stock Priority is Highest/High/Medium/Low/Lowest. We map
-    # S1–S4 onto the four declining groups (Lowest unused). Team/severity also go
-    # on labels; priority_score + confidence stay in the comment (and optional
-    # JIRA_FIELD_* custom fields if configured).
+    # Software project — checked via the Atlassian connector, not assumed): the
+    # only fields on the "Task"/"Request"/"Epic" issue types are Jira's stock set
+    # — Summary, Description, Priority (Highest/High/Medium/Low/Lowest), Labels,
+    # Assignee, a native Team picker, Sprint, Story points, Due date. None of
+    # "Triage Severity" / "Priority Score" / "Routed Team" / "AI Confidence"
+    # exist as custom fields — they were a BLUEPRINT.md §7 suggestion, never
+    # actually created in Jira admin.
+    #
+    # Rather than block write-back on someone creating four custom fields, this
+    # writes onto what the board already has, today, with zero admin setup:
+    #   severity        -> native Priority by name (4 groups declining):
+    #                      S1→Highest, S2→High, S3→Medium, S4→Low
+    #   team/severity   -> labels — team as a short board code (AWS/AZR/GCP/OPS,
+    #                      matching how the rest of the org already tags issues),
+    #                      severity as ticketsphere-severity-<x>
+    #   everything      -> the rationale comment (see add_comment / approve route)
+    # JIRA_FIELD_* stay honoured *additionally* if a team later adds real custom
+    # fields — set is set, but nothing here depends on them existing.
+
+    _TEAM_TO_LABEL = {"aws": "AWS", "azure": "AZR", "gcp": "GCP", "ops": "OPS"}
 
     def update(self, external_id: str, fields: dict[str, Any]) -> None:
         set_fields: dict[str, Any] = {}
@@ -183,8 +199,9 @@ class JiraSource(TicketSource):
                 set_fields["priority"] = {"name": pname}
             label_adds.append(f"ticketsphere-severity-{severity}")
 
-        if fields.get("assigned_team"):
-            label_adds.append(f"ticketsphere-team-{fields['assigned_team']}")
+        team = fields.get("assigned_team")
+        if team:
+            label_adds.append(self._TEAM_TO_LABEL.get(team, team.upper()))
 
         # Optional custom fields, only written if a team has actually created them.
         if "severity" in fields and settings.JIRA_FIELD_SEVERITY:

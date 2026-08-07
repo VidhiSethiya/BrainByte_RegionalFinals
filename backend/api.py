@@ -795,9 +795,13 @@ def integrations_webhook():
 @require_auth
 @require_role("admin", "manager")
 def analytics_triage():
-    """Backs the Control Tower dashboard entirely — frontend TriageAnalytics
-    shape. Every number is a SQL aggregate via ai/tools.py::triage_analytics().
-    Engineers get 403 (manager/admin only)."""
+    """Backs the Control Tower dashboard entirely — frontend/FRONTEND_SPEC.md
+    §6.1's TriageAnalytics shape, matched field-for-field. Every number is a SQL
+    aggregate or a stored-vs-gold-label comparison; see
+    ai/tools.py::triage_analytics(). Manager/admin only, matching Control Tower's
+    own nav scoping (frontend/FRONTEND_SPEC.md §9.2) — an engineer has no
+    legitimate reason to pull cross-team aggregates, same rule as
+    ai/tools.py::ticket_stats()."""
     return ok(tools.triage_analytics(g.user))
 
 

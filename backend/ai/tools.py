@@ -349,6 +349,7 @@ def triage_analytics(user: dict | None = None) -> dict:
     sla_at_risk = 0
     awaiting_approval = 0
     overridden_count = 0
+    decided_count = 0  # status has moved past "new" — the denominator override_rate needs
 
     for row in rows:
         if row.severity:
@@ -357,6 +358,8 @@ def triage_analytics(user: dict | None = None) -> dict:
             by_category[row.category] = by_category.get(row.category, 0) + 1
         if row.overridden_by:
             overridden_count += 1
+        if row.status != "new":
+            decided_count += 1
         is_open = row.status not in ("resolved", "synced")
         if is_open and row.assigned_team:
             by_team_open[row.assigned_team] = by_team_open.get(row.assigned_team, 0) + 1
@@ -402,20 +405,41 @@ def triage_analytics(user: dict | None = None) -> dict:
         "classification_accuracy": accuracy["classification_accuracy"] or 0.0,
         "routing_precision": accuracy["routing_precision"] or 0.0,
         "severity_mae": accuracy["severity_mae"] or 0.0,
-        "override_rate": round(overridden_count / len(rows), 3) if rows else 0.0,
+        # Denominator is tickets that have actually been decided (status != "new"),
+        # not every row — a ticket that was never triaged can't have been overridden,
+        # so counting it against the rate would understate how often a real decision
+        # gets corrected.
+        "override_rate": round(overridden_count / decided_count, 3) if decided_count else 0.0,
         "avg_cost_usd": round(sum(costs) / len(costs), 6) if costs else 0.0,
         "avg_latency_ms": int(sum(latencies) / len(latencies)) if latencies else 0,
         "sla_at_risk": sla_at_risk,
         "awaiting_approval": awaiting_approval,
         "by_category": [{"category": k, "count": v} for k, v in sorted(by_category.items())],
         "tokens_today": tokens_today,
+        # Full 4x4 grid (all severity x severity pairs, 0 where nothing was
+        # observed) rather than a sparse list of only the pairs that occurred —
+        # a confusion-matrix UI wants a stable shape to render, not one it has to
+        # reconstruct from partial data.
         "severity_confusion": [
-            {"actual": c["actual"], "predicted": c["predicted"], "count": c["count"]}
-            for c in accuracy.get("confusion_matrix", [])
+            {
+                "predicted": pred,
+                "actual": actual,
+                "count": next(
+                    (
+                        c["count"]
+                        for c in accuracy.get("confusion_matrix", [])
+                        if c["actual"] == actual and c["predicted"] == pred
+                    ),
+                    0,
+                ),
+            }
+            for actual in ("S1", "S2", "S3", "S4")
+            for pred in ("S1", "S2", "S3", "S4")
         ],
-        # field/from/to are not structurally tracked on Ticket (only the free-text
+        # field/from is not structurally tracked on Ticket (only the free-text
         # override_reason is) — a future TicketRow.override_history JSON column
-        # would fill these properly. Left blank rather than guessed.
+        # would fill it properly. `to` is best-effort from the row's current
+        # (post-override) severity/team, which is usually what was overridden.
         "recent_overrides": [
             {
                 "ticket_id": r.id,
@@ -423,7 +447,7 @@ def triage_analytics(user: dict | None = None) -> dict:
                 "title": r.title,
                 "field": "",
                 "from": "",
-                "to": "",
+                "to": r.severity or r.assigned_team or "",
                 "by": user_names.get(r.overridden_by, r.overridden_by or ""),
                 "reason": r.override_reason or "",
                 "at": r.updated_at.isoformat() if r.updated_at else "",
