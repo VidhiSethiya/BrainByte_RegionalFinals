@@ -37,12 +37,17 @@ from ai.prompts import (
     TRIAGE_CLASSIFY_PROMPT,
 )
 from chatbot.context_manager import build_messages
+from config import settings
+from db.sqlite.models import SessionLocal
+from db.sqlite.models import Ticket as TicketRow
+from db.sqlite.models import TriageRun
 from guardrails.governance import audit
 from guardrails.input_guard import check_input
 from guardrails.output_guard import check_output
 from guardrails.validators import validate_json
-from observability.telemetry import log
+from observability.telemetry import Trace, log
 from rag.anonymizer import anonymize_record
+from rag.rag_indexer import index_ticket
 from rag.rag_retriever import build_context, grade_chunks, retrieve, to_citations
 from rag.schemas import (
     DuplicateVerdict,
@@ -876,3 +881,122 @@ def run_triage(
             "escalation_reason": f"triage graph exception: {exc}",
             "status": "failed",
         }
+
+
+# --- shared ingest orchestration ----------------------------------------------
+#
+# One definition of "a ticket was triaged", called from three places that must
+# never disagree on the sequence: POST /tickets (api.py), the Jira/synthetic
+# poller, and POST /integrations/webhook. All three hand this function a raw
+# ticket dict and get back the same (TicketRow, TriageState) pair.
+
+
+def ingest_and_triage(raw_ticket: dict, user: dict) -> tuple[TicketRow, TriageState]:
+    """upsert TicketRow -> run_triage() -> index_ticket() -> write the decision
+    back onto TicketRow -> persist TriageRun. Matches the sequence
+    .claude/plans/rag-handoff.md §2.1 documents. Never raises — a failure still
+    returns a row (status="failed") and a state with needs_human=True, so a bad
+    ticket lands in the manager's queue instead of vanishing from the pipeline.
+    """
+    with Trace("triage", user_id=(user or {}).get("id")) as trace:
+        external_id = str(raw_ticket.get("external_id") or "").strip()
+        source = str(raw_ticket.get("source") or "manual")
+
+        with SessionLocal() as s:
+            row = None
+            if external_id:
+                row = s.query(TicketRow).filter_by(source=source, external_id=external_id).first()
+            if row is None:
+                row = TicketRow(
+                    external_id=external_id or uuid.uuid4().hex,
+                    source=source,
+                    title=str(raw_ticket.get("title") or ""),
+                    application=str(raw_ticket.get("application") or ""),
+                    environment=str(raw_ticket.get("environment") or "prod"),
+                    channel=str(raw_ticket.get("channel") or ""),
+                    status="new",
+                )
+                s.add(row)
+            else:
+                row.title = str(raw_ticket.get("title") or row.title)
+            s.commit()
+            s.refresh(row)
+            row_id = row.id
+
+        state = run_triage(raw_ticket, user=user, trace=trace)
+        decision = state.get("decision")
+        ticket = state.get("ticket")
+
+        # Index into Chroma for future precedent search. anonymize=False because
+        # triage_normalize() already masked this ticket — indexing it again with
+        # anonymize=True would re-run the (slow, model-calling) anonymization pass
+        # for no benefit, doubling latency and tokens on every single ticket.
+        if ticket is not None:
+            try:
+                with trace.stage("index") as stage:
+                    result = index_ticket(
+                        ticket,
+                        user_id=(user or {}).get("id"),
+                        anonymize=False,
+                        allowed_roles=(
+                            [decision.assigned_team, "manager", "admin"]
+                            if decision
+                            else ["admin", "manager"]
+                        ),
+                        sensitivity="confidential",
+                        category=decision.category if decision else "",
+                        severity=decision.severity if decision else "",
+                        team=decision.assigned_team if decision else "",
+                        service=state.get("service") or ticket.application,
+                    )
+                    stage.meta["chunks"] = result.get("chunks", 0)
+            except Exception as exc:  # noqa: BLE001
+                log.error("index_ticket failed for %s: %s", ticket.id, exc)
+
+        with SessionLocal() as s:
+            row = s.get(TicketRow, row_id)
+            if decision is not None:
+                if ticket is not None:
+                    row.body_masked = ticket.body_masked
+                row.category = decision.category
+                row.subcategory = decision.subcategory
+                row.severity = decision.severity
+                row.priority_score = decision.priority_score
+                row.assigned_team = decision.assigned_team
+                row.confidence = decision.confidence
+                row.needs_human = decision.needs_human
+                row.status = state.get("status", "triaged")
+            else:
+                row.status = state.get("status", "failed")
+                row.last_error = state.get("blocked_reason", "") or state.get(
+                    "escalation_reason", ""
+                )
+            s.commit()
+
+            run = TriageRun(
+                ticket_id=row.id,
+                decision_json=decision.model_dump() if decision else {},
+                model=settings.LLM_MODEL,
+                # The ceiling tier used in this run (assess/reflect run deep);
+                # TriageRun has one tier column, this graph uses three per run.
+                tier="deep",
+                tokens=trace.prompt_tokens + trace.completion_tokens,
+                cost_usd=trace.cost_usd,
+                latency_ms=trace.total_ms,
+                trace_id=trace.id,
+                guardrails_fired=state.get("guardrails_fired") or [],
+            )
+            s.add(run)
+            s.commit()
+            s.refresh(row)
+
+        audit.record(
+            "ticket.ingested",
+            user_id=(user or {}).get("id"),
+            resource=row.id,
+            external_id=row.external_id,
+            source=source,
+            status=row.status,
+            trace_id=trace.id,
+        )
+        return row, state

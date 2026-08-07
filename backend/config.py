@@ -122,6 +122,26 @@ class Settings:
     ROLES = ["admin", "manager", "engineer", "viewer"]
     TEAMS = ["ops", "azure", "aws", "gcp"]
 
+    # --- ticket source: Jira integration (backend/integrations/) ---
+    # "synthetic" (default) reads db/vectordb/data/seed/tickets/*.json and never
+    # calls out anywhere — the safe default and the offline fallback. "jira"
+    # requires the four JIRA_* values below. Poll-based sync is primary; see
+    # backend/integrations/jira.py's module docstring for why.
+    JIRA_BASE_URL = os.getenv("JIRA_BASE_URL", "").rstrip("/")
+    JIRA_EMAIL = os.getenv("JIRA_EMAIL", "").strip()
+    JIRA_API_TOKEN = os.getenv("JIRA_API_TOKEN", "").strip()
+    JIRA_PROJECT_KEY = os.getenv("JIRA_PROJECT_KEY", "SCRUM").strip()
+    JIRA_POLL_SECONDS = _int("JIRA_POLL_SECONDS", 30)
+    # Per-site custom field ids (customfield_10xxx) — cannot be guessed from
+    # documentation. Empty means "don't write that field" rather than a wrong
+    # guess landing quietly in the wrong place. Confirm the real ids against the
+    # board (Project settings -> Fields, or GET /rest/api/3/issue/<key>?expand=names)
+    # and set these once you have access.
+    JIRA_FIELD_SEVERITY = os.getenv("JIRA_FIELD_SEVERITY", "").strip()
+    JIRA_FIELD_PRIORITY_SCORE = os.getenv("JIRA_FIELD_PRIORITY_SCORE", "").strip()
+    JIRA_FIELD_ROUTED_TEAM = os.getenv("JIRA_FIELD_ROUTED_TEAM", "").strip()
+    JIRA_FIELD_AI_CONFIDENCE = os.getenv("JIRA_FIELD_AI_CONFIDENCE", "").strip()
+
     def ensure_dirs(self) -> None:
         for d in (SQLITE_DIR, VECTOR_DIR, self.CHROMA_PERSIST_DIR, self.UPLOAD_DIR, self.SEED_DIR):
             d.mkdir(parents=True, exist_ok=True)

@@ -62,6 +62,11 @@ def create_app() -> Flask:
         settings.EMBEDDING_MODEL,
         settings.RETRIEVAL_MODE,
     )
+
+    from integrations.poller import start_background_poller
+
+    start_background_poller()
+
     return app
 
 

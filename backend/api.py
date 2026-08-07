@@ -32,6 +32,9 @@ from pydantic import BaseModel, ValidationError
 from sqlalchemy import asc, desc, or_
 from werkzeug.utils import secure_filename
 
+from ai import tools
+from ai.agents import ingest_and_triage
+from ai.tools import ToolDenied
 from chatbot import session_manager as sessions
 from chatbot.conversation_manager import handle_message
 from config import settings
@@ -43,15 +46,18 @@ from db.sqlite.models import (
     EvalResult,
     Feedback,
     SessionLocal,
+    Ticket,
+    TriageRun,
     User,
 )
 from db.vectordb import vector_store
 from guardrails.governance import audit
+from integrations.poller import get_watermark, poll_once
 from observability import evals
 from observability.telemetry import log, recent_traces, usage_summary
 from rag import rag_indexer
 from rag.rag_retriever import retrieve
-from rag.schemas import ChatRequest, FeedbackRequest, LoginRequest
+from rag.schemas import ChatRequest, FeedbackRequest, LoginRequest, OverrideRequest, TicketIngestRequest
 
 api_bp = Blueprint("api", __name__)
 
@@ -503,6 +509,251 @@ def search():
         [c.model_dump() for c in chunks],
         {"count": len(chunks), "mode": settings.RETRIEVAL_MODE},
     )
+
+
+# --- tickets ------------------------------------------------------------------
+
+
+def _scope_ticket_query(query, user: dict):
+    """Same rule as retrieval's ACL, applied to the SQL side: admin/manager (or
+    anyone holding the "all" clearance) see every team's tickets; an engineer
+    sees only the teams in their own clearances. Scoped in the query, never by
+    filtering rows in Python afterwards — the same principle
+    guardrails/governance/access_control.py applies to the vector store."""
+    role = user.get("role", "viewer")
+    clearances = user.get("clearances") or []
+    if role in ("admin", "manager") or "all" in clearances:
+        return query
+    teams = [c for c in clearances if c in settings.TEAMS]
+    return query.filter(Ticket.assigned_team.in_(teams)) if teams else query.filter(False)
+
+
+@api_bp.post("/tickets")
+@require_auth
+@rate_limit(per_minute=30)
+def create_ticket():
+    """Live triage: paste/submit a ticket, run it through the full graph, get a
+    routed decision back. Open to any authenticated user — the manager-only gate
+    is on *approving* a decision (POST /tickets/<id>/approve), not on submitting
+    one for triage."""
+    payload, error = validate_request(request.get_json(silent=True), TicketIngestRequest)
+    if error:
+        return fail("validation_error", error, 422)
+
+    row, state = ingest_and_triage(payload.model_dump(), g.user)
+    decision = state.get("decision")
+    return ok(
+        {
+            "ticket": row.to_dict(),
+            "decision": decision.model_dump() if decision else None,
+            "blocked": state.get("blocked", False),
+            "blocked_reason": state.get("blocked_reason", ""),
+            "guardrails_fired": state.get("guardrails_fired") or [],
+        },
+        {"status": row.status},
+    )
+
+
+@api_bp.get("/tickets")
+@require_auth
+def list_tickets():
+    params = parse_query_params()
+    with SessionLocal() as s:
+        query = _scope_ticket_query(s.query(Ticket), g.user)
+        query = apply_query(query, Ticket, params, searchable=["external_id", "title"])
+        rows, meta = paginate(query, params)
+        return ok([r.to_dict() for r in rows], meta)
+
+
+@api_bp.get("/teams/queue")
+@require_auth
+def team_queue():
+    """The engineer console's queue — open tickets only, same ACL scoping as
+    /tickets. filter[status] still works for a manager who wants one team's open
+    items without the closed history."""
+    params = parse_query_params()
+    with SessionLocal() as s:
+        query = _scope_ticket_query(s.query(Ticket), g.user)
+        query = query.filter(Ticket.status.notin_(["resolved", "synced"]))
+        query = apply_query(query, Ticket, params, searchable=["external_id", "title"])
+        rows, meta = paginate(query, params)
+        return ok([r.to_dict() for r in rows], meta)
+
+
+@api_bp.get("/tickets/<ticket_id>")
+@require_auth
+def get_ticket(ticket_id: str):
+    with SessionLocal() as s:
+        row = s.get(Ticket, ticket_id)
+        if not row:
+            return fail("not_found", "Ticket not found", 404)
+        if _scope_ticket_query(s.query(Ticket).filter_by(id=ticket_id), g.user).first() is None:
+            # Exists, but not on this user's team — 404, not 403, so the queue
+            # never leaks which ids exist outside a user's ACL scope.
+            return fail("not_found", "Ticket not found", 404)
+        runs = (
+            s.query(TriageRun)
+            .filter_by(ticket_id=ticket_id)
+            .order_by(TriageRun.created_at.desc())
+            .limit(5)
+            .all()
+        )
+        return ok({"ticket": row.to_dict(), "runs": [r.to_dict() for r in runs]})
+
+
+@api_bp.patch("/tickets/<ticket_id>/override")
+@require_auth
+def override_ticket(ticket_id: str):
+    """Manager or engineer-on-their-own-team can override a field. Reason is
+    mandatory (OverrideRequest enforces min_length=3) — every override is both
+    audited and queued as feedback, so it feeds the eval set the same way a
+    thumbs-down on a chat answer does."""
+    payload, error = validate_request(request.get_json(silent=True), OverrideRequest)
+    if error:
+        return fail("validation_error", error, 422)
+
+    with SessionLocal() as s:
+        row = s.get(Ticket, ticket_id)
+        if not row:
+            return fail("not_found", "Ticket not found", 404)
+        if _scope_ticket_query(s.query(Ticket).filter_by(id=ticket_id), g.user).first() is None:
+            return fail("not_found", "Ticket not found", 404)
+
+        setattr(row, payload.field, payload.new_value)
+        row.overridden_by = g.user["id"]
+        row.override_reason = payload.reason
+        s.commit()
+        s.refresh(row)
+
+        audit.record(
+            "ticket.overridden",
+            user_id=g.user["id"],
+            resource=ticket_id,
+            field=payload.field,
+            new_value=payload.new_value,
+            reason=payload.reason,
+        )
+        # Feeds the eval set the same way a chat thumbs-down does — a message_id
+        # is required by the Feedback table, so the ticket id doubles as one here.
+        s.add(
+            Feedback(
+                message_id=ticket_id,
+                user_id=g.user["id"],
+                rating=-1,
+                comment=f"override {payload.field} -> {payload.new_value}: {payload.reason}",
+            )
+        )
+        s.commit()
+        return ok(row.to_dict())
+
+
+@api_bp.post("/tickets/<ticket_id>/approve")
+@require_auth
+@require_role("admin", "manager")
+def approve_ticket(ticket_id: str):
+    """The human-in-the-loop gate's other half. Sets status to "approved" *then*
+    calls tools.ticket_update — the tool itself re-checks that status before
+    writing anything, so this route cannot accidentally bypass the gate by
+    calling the ticket source directly."""
+    with SessionLocal() as s:
+        row = s.get(Ticket, ticket_id)
+        if not row:
+            return fail("not_found", "Ticket not found", 404)
+
+        row.status = "approved"
+        s.commit()
+        s.refresh(row)
+
+        fields = {
+            "severity": row.severity,
+            "priority_score": row.priority_score,
+            "assigned_team": row.assigned_team,
+            "confidence": row.confidence,
+        }
+
+    try:
+        result = tools.call(
+            "ticket_update",
+            ticket_id,
+            fields,
+            user=g.user,
+            ticket_status="approved",
+            confidence=row.confidence,
+            severity=row.severity,
+        )
+    except ToolDenied as exc:
+        return fail("tool_denied", str(exc), 403)
+
+    try:
+        source = tools.get_ticket_source()
+        source.add_comment(
+            ticket_id,
+            f"TicketSphere: {row.severity} · {row.assigned_team} · "
+            f"priority {row.priority_score} · confidence {row.confidence:.0%}. "
+            f"Approved by {g.user.get('username', g.user['id'])}.",
+        )
+        source.transition(ticket_id, "routed")
+    except Exception as exc:  # noqa: BLE001 - comment/transition failure must not lose the approval
+        log.warning("post-approval comment/transition failed for %s: %s", ticket_id, exc)
+
+    with SessionLocal() as s:
+        row = s.get(Ticket, ticket_id)
+        row.status = "routed"
+        row.needs_human = False
+        s.commit()
+        s.refresh(row)
+
+    audit.record("ticket.approved", user_id=g.user["id"], resource=ticket_id, **result)
+    return ok(row.to_dict())
+
+
+# --- integrations -------------------------------------------------------------
+
+
+@api_bp.post("/integrations/sync")
+@require_auth
+@require_role("admin", "manager")
+@rate_limit(per_minute=6)
+def integrations_sync():
+    """Manually trigger one poll cycle now, instead of waiting for the
+    JIRA_POLL_SECONDS timer — the demo control for "show me it pulling live"."""
+    result = poll_once()
+    audit.record("integrations.sync", user_id=g.user["id"], **result)
+    return ok(result, {"watermark": get_watermark()})
+
+
+@api_bp.post("/integrations/webhook")
+def integrations_webhook():
+    """Receiver for a Jira Automation "issue created/updated -> send web request"
+    rule. Not the primary sync path — see integrations/jira.py's module
+    docstring — demoed with a local curl rather than a live rule, since the AI
+    Lab's laptops have no public URL for Jira to reach. Deliberately unauthenticated
+    (Jira Automation webhooks are not easily made to carry a bearer token); if this
+    ever faces a real network, put it behind a shared-secret header check.
+    """
+    body = request.get_json(silent=True) or {}
+    issue = body.get("issue") or body
+    fields = issue.get("fields") or {}
+
+    from integrations.jira import adf_to_text
+
+    raw = {
+        "external_id": issue.get("key", ""),
+        "source": "jira",
+        "title": fields.get("summary", ""),
+        "body": adf_to_text(fields.get("description")) or fields.get("description", ""),
+        "application": "",
+        "environment": "prod",
+        "channel": "jira-webhook",
+        "raw": body,
+    }
+    if not raw["external_id"] or not raw["title"]:
+        return fail("validation_error", "issue.key and fields.summary are required", 422)
+
+    system_user = {"id": "system:webhook", "role": "admin", "clearances": ["all"]}
+    row, state = ingest_and_triage(raw, system_user)
+    audit.record("integrations.webhook_received", resource=row.id, external_id=row.external_id)
+    return ok({"ticket_id": row.id, "status": row.status, "blocked": state.get("blocked", False)})
 
 
 # --- feedback / human-in-the-loop -------------------------------------------
