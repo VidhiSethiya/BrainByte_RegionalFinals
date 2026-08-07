@@ -1,0 +1,60 @@
+Application Maintenance Intelligent Ticket Triage Agent
+PROBLEM STATEMENT
+IT support teams managing large-scale applications experience high volumes of maintenance tickets with diverse issues and priorities. Manual triage is time-consuming and inconsistent, leading to delayed resolution and reduced user satisfaction. Existing ticketing systems lack intelligent routing and prioritization based on issue severity, historical data, and resource availability. An Al-powered multi-agent system is needed to analyze incoming tickets, classify and prioritize them, and route them to the appropriate teams, improving resolution times and operational efficiency.
+Data Considerations:
+Historical and incoming ticket data in structured and unstructured formats (text, JSON); metadata including timestamps, issue categories, and resolution times; integration with ticketing platforms via APls; moderate data volume with daily ticket influx; preprocessing includes text normalization and feature extraction; privacy compliance for sensitive customer data; synthetic ticket datasets with varied severity for development.
+Consider using synthetic or anonymized data where appropriate. Ensure data quality and relevance to the problem context.
+SOLUTION EXPECTATIONS
+A multi-agent system with agents for ticket ingestion, NLP-based classification and prioritization, and routing to relevant teams or individuals. Features include an advanced Ul for support managers to view ticket queues, priority scores, and routing decisions with override capabilities. Integrations with ticketing system APls provide two-way synchronization. Success metrics include classification accuracy, average resolution time reduction, and routing precision. Demonstrations cover live ticket triage scenarios, multi-agent coordination, and test automation with full documentation.
+Feel free to explore creative solutions that align with the problem context and objectives.
+
+Use the following checklist as applicable while solving the selected problem statement
+USER EXPERIENCE AND INTERFACE
+Design an intuitive interface aligned to the target workflow, user journey, context, tone, and accessibility needs.
+• Use conversation, visualization crabid experience where it improves carity, personalization, and speed of action
+DATA ARCHITECTURE AND PROCESSING
+• Use relevant, high-quality, anonymized or synthetic data with clear preprocessing, retrieval, aggregation, and correlation Choose suitable storage for structured and unstructured data, ensuring consistency across sources, generated datasets, and
+downstream outputs.
+CORE AI SOLUTION DESIGN AND AGENTIC ARCHITECTURE
+• Define the agentic design pattern, agent roles, collaboration model, handoffs, tool usage, retry, reflection, and escalation logic.
+• Balance autonomy with human approval checkpoints, intervention points, and clear boundaries for high-risk or uncertain
+• Ground outputs in trusted sources, cite evidence where useful, separate facts from assumotions, and explain reasoning
+confidence, limits, and trade-offs.
+• Build responsible Al guardrails for privacy, bias, explainability, prompt injection, unsafe recommendations, unauthorized tool
+execution, and regulated decisions.
+TECHNICAL IMPLEMENTATION
+• Use a modular, scalable architecture that clearly separates Al layers, enterprise systems, knowledge stores, APls, tools, and external feeds.
+• Define context engineering across memory, caching, retrieval, prompts, context windows, token usage, latency, cost, and
+privacy.
+• Maintain configurability across models, prompts, tools, APls, vector stores, and deployment environments to avoid lock-in.
+• Cover security, identity, permissions, secrets, data retention, audit logging, access governance, and misuse monitoring.
+TESTING AND QUALITY ASSURANCE
+• Evaluate beyond demo success: accuracy, groundedness, hallucination control, latency, cost, reliability, traceability, safety, and user trust.
+• Use varied test data, edge cases, failure scenarios, expected outputs, scoring criteria, and automated checks where practical.
+• Validate robustness, accuracy, and reliability across key use-case conditions and user journeys.
+DEMO READINESS
+• Prepare realistic demo flows using quality input data, edge cases, failure paths, and expected outcomes.
+• Show how Al, GenAl, or Agentic Al improves the solution versus a conventional approach in speed, scale, quality, reliability, or personalization.
+• Clearly explain business value, adoption path, measurable outcomes, design choices, alternatives, trade-offs, and prototype-to-enterprise readiness.
+• Walk through problem breakdown, data preparation, architecture, agent roles, prompts, tools, evaluation approach, code flow, and Al-assisted code generation.
+
+
+Problem understanding
+
+Ai innovation 
+
+Biz impact 
+
+creativity 
+
+rationality behind using the model
+
+Satisfy customer expectation
+
+Fully Functioning prototype
+
+Ux user friendly colour palette no of clicks, flexibility, voice based commands, use ai wherever possible 
+
+Responsible AI, fairness privacy, transparency, guardrails, safe
+
+Scalability - by volume, load, complexity, how will the product be resilient to prod load
