@@ -48,11 +48,15 @@ class Settings:
     LLM_PROVIDER = os.getenv("LLM_PROVIDER", "local").strip().lower()
     OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "ollama")
     OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "http://localhost:11434/v1")
-    LLM_MODEL = os.getenv("LLM_MODEL", "llama-3.2-3b-it:latest")
-    FAST_LLM_MODEL = os.getenv("FAST_LLM_MODEL", LLM_MODEL)
+    LLM_MODEL = os.getenv("LLM_MODEL", "llama-3.2-3b-it:latest")       # standard tier
+    FAST_LLM_MODEL = os.getenv("FAST_LLM_MODEL", LLM_MODEL)            # fast tier
+    REASONING_MODEL = os.getenv("REASONING_MODEL", LLM_MODEL)          # deep tier
     EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "gte-large:latest")
     # Vision-capable model for images / scanned pages. Empty disables the vision path.
     VISION_MODEL = os.getenv("VISION_MODEL", "").strip()
+    # Speech-to-text for POST /api/voice/transcribe. Empty disables the endpoint; the
+    # frontend's mic button hides itself rather than erroring (see FRONTEND_SPEC §10).
+    WHISPER_MODEL = os.getenv("WHISPER_MODEL", "").strip()
     LLM_TEMPERATURE = _float("LLM_TEMPERATURE", 0.1)
     LLM_TIMEOUT_SECONDS = _int("LLM_TIMEOUT_SECONDS", 60)
     LLM_MAX_RETRIES = _int("LLM_MAX_RETRIES", 1)
@@ -108,7 +112,9 @@ class Settings:
     FRONTEND_DIST = REPO_ROOT / "frontend" / "dist"
 
     # --- domain (filled by the guide-me blueprint) ---
-    DOMAIN = os.getenv("DOMAIN", "[DOMAIN]")
+    DOMAIN = os.getenv(
+        "DOMAIN", "IT service management — application maintenance ticket triage"
+    )
     ROLES = ["admin", "analyst", "viewer"]  # [PLACEHOLDER: DOMAIN_ROLES]
 
     def ensure_dirs(self) -> None:

@@ -16,7 +16,7 @@ import re
 import warnings
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 from functools import lru_cache
-from typing import Any, Callable, Iterable, TypeVar
+from typing import Any, Callable, Iterable, Literal, TypeVar
 
 import httpx
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
@@ -27,6 +27,16 @@ from observability.telemetry import log
 
 T = TypeVar("T")
 R = TypeVar("R")
+
+# Three tiers, not one model. Which tier a call gets is a cost/quality decision made
+# at the call site, not a global setting — see docs/JUDGES_QA.md "Which model are
+# you using?" for the reasoning.
+#   deep     -> settings.REASONING_MODEL  — severity/priority, reflection, manager
+#               Q&A: the calls where a wrong answer is expensive. ~15% of calls.
+#   standard -> settings.LLM_MODEL        — generation, classification, routing.
+#   fast     -> settings.FAST_LLM_MODEL   — plan, rewrite, CRAG grading, guardrail
+#               JSON, summaries. ~70% of calls, short and schema-bound.
+ModelTier = Literal["fast", "standard", "deep"]
 
 # Two pools, deliberately. `parallel_map` fans out work whose individual items each
 # call `with_timeout` — sharing one pool would let the fan-out saturate every worker
@@ -151,11 +161,28 @@ def resolve_provider() -> dict[str, Any]:
     return _provider
 
 
-@lru_cache(maxsize=4)
-def get_llm(fast: bool = False, temperature: float | None = None) -> ChatOpenAI:
+@lru_cache(maxsize=8)
+def get_llm(
+    tier: ModelTier | None = None,
+    fast: bool = False,
+    temperature: float | None = None,
+) -> ChatOpenAI:
+    """Return a client for one of three tiers.
+
+    `fast=True` is a deprecated alias for `tier="fast"`, kept so existing call
+    sites (guardrails, evals, rag_retriever, chatbot) do not need to change in the
+    same breath as this signature. When both are given, `tier` wins.
+    """
+    resolved: ModelTier = tier or ("fast" if fast else "standard")
+    model = {
+        "fast": settings.FAST_LLM_MODEL,
+        "standard": settings.LLM_MODEL,
+        "deep": settings.REASONING_MODEL,
+    }[resolved]
+
     p = resolve_provider()
     return ChatOpenAI(
-        model=settings.FAST_LLM_MODEL if fast else settings.LLM_MODEL,
+        model=model,
         temperature=settings.LLM_TEMPERATURE if temperature is None else temperature,
         max_retries=settings.LLM_MAX_RETRIES,
         timeout=settings.LLM_TIMEOUT_SECONDS,
@@ -181,6 +208,7 @@ def get_embeddings() -> OpenAIEmbeddings:
 def chat(
     prompt: str,
     system: str = "",
+    tier: ModelTier | None = None,
     fast: bool = False,
     temperature: float | None = None,
     trace: Any = None,
@@ -191,16 +219,21 @@ def chat(
         messages.append(SystemMessage(content=system))
     messages.append(HumanMessage(content=prompt))
 
-    llm = get_llm(fast=fast, temperature=temperature)
+    llm = get_llm(tier=tier, fast=fast, temperature=temperature)
     response: AIMessage = with_timeout(llm.invoke, messages)
     if trace is not None:
         trace.add_usage(response, model=llm.model_name)
     return (response.content or "").strip()
 
 
-def chat_messages(messages: list[Any], fast: bool = False, trace: Any = None) -> str:
+def chat_messages(
+    messages: list[Any],
+    tier: ModelTier | None = None,
+    fast: bool = False,
+    trace: Any = None,
+) -> str:
     """Multi-turn completion for the chatbot path."""
-    llm = get_llm(fast=fast)
+    llm = get_llm(tier=tier, fast=fast)
     response: AIMessage = with_timeout(llm.invoke, messages)
     if trace is not None:
         trace.add_usage(response, model=llm.model_name)
@@ -213,6 +246,7 @@ _JSON_BLOCK = re.compile(r"```(?:json)?\s*(.*?)```", re.S)
 def chat_json(
     prompt: str,
     system: str = "",
+    tier: ModelTier | None = None,
     fast: bool = True,
     trace: Any = None,
     default: Any = None,
@@ -222,8 +256,13 @@ def chat_json(
     Small local models fence their output and add prose; this strips both. A parse
     failure returns `default` rather than raising, because every caller is a guardrail
     or a scorer that must not take down the request.
+
+    Defaults to the fast tier (`fast=True`) because most JSON callers are guardrails
+    and scorers — short, schema-bound, high-volume. Pass `tier="deep"` explicitly for
+    the calls that warrant it (e.g. severity assessment); `tier`, when given, always
+    wins over `fast`.
     """
-    raw = chat(prompt, system=system, fast=fast, temperature=0, trace=trace)
+    raw = chat(prompt, system=system, tier=tier, fast=fast, temperature=0, trace=trace)
     candidate = raw
     block = _JSON_BLOCK.search(raw)
     if block:
