@@ -378,6 +378,17 @@ Priority definitions (Jira names) — do not deviate from these:
   production-bound issue
 - Low: cosmetic, informational, or a request with no active failure
 
+priority_score MUST land inside the band your severity implies — it is where in
+that band this ticket sits, not a second opinion on the severity itself:
+  Highest -> 76-100   High -> 51-75   Medium -> 26-50   Low -> 0-25
+Place it near the MIDDLE of that range for a typical case (e.g. ~88, ~63, ~38,
+~13). Move toward the range's outer edge only when the evidence is unusually
+strong or weak for that band — and if you find yourself reaching for the very
+top of the range (75, 100), reconsider whether the ticket actually belongs one
+band higher instead. A score that lands on 25, 50, or 75 exactly reads as "this
+could just as easily be the next band up" — only use one of those exact values
+when that is genuinely true.
+
 Return JSON only, matching this schema exactly (SeverityVerdict in rag/schemas.py):
 {{
   "severity": "Highest|High|Medium|Low",

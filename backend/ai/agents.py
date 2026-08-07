@@ -1264,13 +1264,18 @@ def ingest_and_triage(raw_ticket: dict, user: dict) -> tuple[TicketRow, TriageSt
 
                         src = get_ticket_source()
                         pname = normalize_priority(decision.severity) or "Medium"
-                        src.add_comment(
-                            external_key,
+                        comment = (
                             f"TicketSphere auto-approved: {pname} · "
                             f"{decision.assigned_team} · "
                             f"confidence {decision.confidence:.0%}. "
-                            f"{(decision.rationale or '')[:400]}",
+                            f"{(decision.rationale or '')[:400]}"
                         )
+                        if decision.suggested_first_action:
+                            comment += (
+                                f"\n\nRecommended resolution: "
+                                f"{decision.suggested_first_action[:600]}"
+                            )
+                        src.add_comment(external_key, comment)
                         src.transition(external_key, "routed")
                     except Exception as exc:  # noqa: BLE001
                         log.warning(
@@ -1439,12 +1444,15 @@ def recalculate_ticket_confidence(ticket_id: str, user: dict | None = None) -> d
 
                     src = get_ticket_source()
                     pname = normalize_priority(sev) or "Medium"
-                    src.add_comment(
-                        external_key,
+                    comment = (
                         f"TicketSphere auto-routed (confidence recalc): {pname} · "
                         f"{fields.get('assigned_team')} · "
-                        f"confidence {confidence:.0%}.",
+                        f"confidence {confidence:.0%}."
                     )
+                    recalc_action = decision.get("suggested_first_action") if run is not None else ""
+                    if recalc_action:
+                        comment += f"\n\nRecommended resolution: {recalc_action[:600]}"
+                    src.add_comment(external_key, comment)
                     src.transition(external_key, "routed")
                 except Exception as exc:  # noqa: BLE001
                     log.warning("confidence-recalc Jira write-back failed for %s: %s", ticket_id, exc)

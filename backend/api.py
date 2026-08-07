@@ -877,6 +877,24 @@ def approve_ticket(ticket_id: str):
         }
         confidence = row.confidence or 0.0
 
+        # The engineer-facing recommendation: an excerpt from the runbook's own
+        # Fix section (ai/agents.py::_suggest_first_action — never LLM-generated,
+        # so it can never be more than what a human already wrote down). Lives
+        # only in the latest TriageRun's decision_json, not on the Ticket row,
+        # so it must be pulled explicitly here or the Jira comment silently
+        # omits the one thing an on-call engineer actually needs.
+        latest_run = (
+            s.query(TriageRun)
+            .filter(TriageRun.ticket_id == ticket_id)
+            .order_by(TriageRun.created_at.desc())
+            .first()
+        )
+        first_action = (
+            (latest_run.decision_json or {}).get("suggested_first_action", "")
+            if latest_run
+            else ""
+        )
+
     try:
         result = tools.call(
             "ticket_update",
@@ -898,12 +916,14 @@ def approve_ticket(ticket_id: str):
     else:
         try:
             source = tools.get_ticket_source()
-            source.add_comment(
-                external_id,
+            comment = (
                 f"TicketSphere: {severity} · {assigned_team} · "
                 f"confidence {confidence:.0%}. "
-                f"Approved by {g.user.get('username', g.user['id'])}.",
+                f"Approved by {g.user.get('username', g.user['id'])}."
             )
+            if first_action:
+                comment += f"\n\nRecommended resolution: {first_action[:600]}"
+            source.add_comment(external_id, comment)
             source.transition(external_id, "routed")
         except Exception as exc:  # noqa: BLE001 - comment/transition failure must not lose the approval
             log.warning(
