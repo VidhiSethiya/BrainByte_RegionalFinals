@@ -200,6 +200,56 @@ save time; keep them shallow instead:
 - Immutable audit log: hash-chained, append-only
 - Evals: groundedness, context precision/recall, hallucination rate — surfaced in the UI
 
+  ## add these according to the problem statement
+  01     Structured Output Agent
+Enforce Pydantic JSON schemas, validate tool responses, retry on parse errors, log validation failures.
+→ SHOWS  You can make LLMs reliable, not random.
+BUILD IT  pydantic.dev/articles/llm-intro
+  02     RAG Agent with Citation Grounding
+Retrieve context, generate answers with sources, flag low-confidence responses, fallback to search.
+→ SHOWS  You can prevent hallucinations at scale.
+BUILD IT  js.langchain.com/docs/how_to/qa_citations
+  03     ReAct Planning Agent
+Observe → think → act → reflect loop, max iteration limits, self-critique, graceful degradation.
+→ SHOWS  You can build agents that don't infinite loop.
+BUILD IT  github.com/langchain-ai/react-agent
+  04     Multi-Tool Orchestrator Agent
+Dynamic tool registry, capability-based routing, permission scoping, parallel execution, conflict resolution.
+→ SHOWS  You can coordinate complex workflows.
+BUILD IT  docs.langchain.com/oss/python/langchain/multi-agent/subagents-personal-assistant
+  05     Memory-Enabled Conversational Agent
+Short-term buffer + long-term vector recall, context compression, relevance scoring, cross-session sync.
+→ SHOWS  You can build agents that remember users.
+BUILD IT  github.com/FareedKhan-dev/langgraph-long-memory
+  06     Human-in-the-Loop Approval Agent
+Uncertainty detection → pause → request human input → resume with validated context, full audit trail.
+→ SHOWS  You can build safe, compliant systems.
+BUILD IT  docs.bswen.com/blog/2026-04-16-langgraph-human-in-the-loop
+  07     Cost-Aware Agent Router
+Token budgeting per task, model routing by complexity/cost, early exit on confidence, cost-per-decision analytics.
+→ SHOWS  You can reduce infra costs by 40–60%.
+BUILD IT  docs.litellm.ai/docs/routing-load-balancing
+  08     Event-Triggered Automation Agent
+Listen to webhooks/queues, execute workflows on triggers, idempotent execution, dead-letter handling, retry logic.
+→ SHOWS  You can build production automation, not demos.
+BUILD IT  hookdeck.com/webhooks/guides/dead-letter-queues-webhook-reliability
+  09     Multi-Agent Debate System
+Multiple agents propose solutions, critic evaluates, voting/consensus logic, aggregator synthesizes with confidence.
+→ SHOWS  You can orchestrate swarms, not single agents.
+BUILD IT  github.com/composable-models/llm_multiagent_debate
+  10     Self-Reflective Agent with Auto-Eval
+Execute → evaluate via LLM-as-judge → critique reasoning → regenerate with constraints, log improvement metrics.
+→ SHOWS  You can build systems that improve over time.
+BUILD IT  github.com/noahshinn/reflexion
+  11     Production Agent with Observability
+Deploy with LangSmith/Arize tracing, latency/cost dashboards, alerting on loops/failures, canary testing, rollback.
+→ SHOWS  You can ship to production, not just localhost.
+BUILD IT  freecodecamp.org/news/how-to-trace-and-monitor-ai-agents-with-langsmith
+  12     Open Source Agent Framework Contribution
+Extend LangGraph/CrewAI/AutoGen with a new pattern, write docs + demo, publish benchmarks, submit PR + tutorial.
+→ SHOWS  You're a community builder, not just a consumer.
+BUILD IT  github.com/langchain-ai/langgraph/blob/main/CONTRIBUTING.m
+
 ## On build day
 
 Run the `guide-me` skill with the problem statement. It proposes domain-specific
