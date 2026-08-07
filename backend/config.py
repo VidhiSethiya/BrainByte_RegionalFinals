@@ -63,11 +63,18 @@ class Settings:
     VISION_MODEL = os.getenv("VISION_MODEL", "").strip()
     REASONING_MODEL = os.getenv("REASONING_MODEL", "").strip()
     WHISPER_MODEL = os.getenv("WHISPER_MODEL", "").strip()
-    # What ai/llm.py actually requests for every tier once resolve_provider() has
-    # fallen back to local — LLM_MODEL/FAST_LLM_MODEL/REASONING_MODEL/EMBEDDING_MODEL
-    # above may hold hosted-only ids (azure/genailab-maas-...) that don't exist on a
-    # local Ollama daemon and would 404 rather than gracefully degrade.
+    # What ai/llm.py actually requests for chat once resolve_provider() has fallen
+    # back to local — LLM_MODEL/FAST_LLM_MODEL/REASONING_MODEL above may hold
+    # hosted-only ids (azure/genailab-maas-...) that don't exist on a local Ollama
+    # daemon and would 404 rather than gracefully degrade.
     LOCAL_CHAT_MODEL = os.getenv("LOCAL_CHAT_MODEL", "llama-3.2-3b-it:latest")
+    # EMERGENCY STOPGAP ONLY — not a first-class fallback like LOCAL_CHAT_MODEL.
+    # ai/llm.py::embed_texts()/embed_query() reach for this only after the hosted
+    # embedding call itself raises (e.g. a genailab.tcs.in outage), and log loudly
+    # every time it fires. Any chunk embedded this way is in a different vector
+    # space than the rest of the Chroma collection — see get_embeddings()'s
+    # docstring. Reseed (`seed_vector_db.py --reset`) once hosted is back to
+    # normal to undo any drift this caused.
     LOCAL_EMBEDDING_MODEL = os.getenv("LOCAL_EMBEDDING_MODEL", "gte-large:latest")
     LLM_TEMPERATURE = _float("LLM_TEMPERATURE", 0.1)
     LLM_TIMEOUT_SECONDS = _int("LLM_TIMEOUT_SECONDS", 60)

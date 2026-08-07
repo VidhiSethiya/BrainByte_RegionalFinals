@@ -215,23 +215,43 @@ def get_llm(
 
 @lru_cache(maxsize=1)
 def get_embeddings() -> OpenAIEmbeddings:
-    p = resolve_provider()
-    # Same local/hosted split as get_llm() and for the same reason — a hosted
-    # embedding id would 404 against local Ollama once resolve_provider() has
-    # fallen back. NOTE the dimension trap this doesn't (and can't) solve: if the
-    # index was built with the hosted 3072-dim model and the gateway then drops
-    # mid-session, every subsequent query embeds at 1024-dim and silently
-    # mismatches the existing Chroma collection. That is an operational risk to
-    # manage on demo day (reseed after any embedding-model change, don't let a
-    # live fallback happen after the index is built), not something a client
-    # constructor can fix.
-    model = settings.LOCAL_EMBEDDING_MODEL if p["name"] == "local" else settings.EMBEDDING_MODEL
+    """The hosted `EMBEDDING_MODEL` (text-embedding-3-large) — the only client
+    `get_embeddings()` itself builds, and what every normal call uses.
+
+    Deliberately does NOT follow `resolve_provider()`'s local/hosted split the way
+    `get_llm()` does. Chat can safely fall back to local Ollama mid-session because
+    every chat call is independent — but embeddings are not: every chunk already in
+    Chroma was embedded with one model's vector space, and mixing in a
+    different-dimension model (e.g. a local one) would silently corrupt similarity
+    search against the existing index, or fail outright on a dimension mismatch.
+    See .claude/plans/rag-handoff.md §3 ("do not change without full reseed") and
+    rag.md's known-risks table.
+
+    `embed_texts()`/`embed_query()` below hold an emergency-only exception to this:
+    if the hosted call itself raises (a genailab.tcs.in outage, not just a slow
+    response), they fall back to a local model rather than dead-lettering every
+    ticket for the outage's duration. That fallback is a deliberate, logged,
+    stopgap trade-off — not a return to the old local/hosted split this function
+    used to have.
+    """
     return OpenAIEmbeddings(
-        model=model,
-        # Non-OpenAI models have no tiktoken encoding; skipping the length check keeps
-        # gte-large working through the OpenAI-compatible client.
+        model=settings.EMBEDDING_MODEL,
+        # Non-OpenAI-native models have no tiktoken encoding; skipping the length
+        # check keeps them working through the OpenAI-compatible client.
         check_embedding_ctx_length=False,
-        **_client_kwargs(p["base_url"], p["api_key"]),
+        **_client_kwargs(settings.OPENAI_BASE_URL, settings.OPENAI_API_KEY),
+    )
+
+
+@lru_cache(maxsize=1)
+def _local_embeddings() -> OpenAIEmbeddings:
+    """Emergency-only fallback client — see get_embeddings()'s docstring. Never
+    called directly by retrieval/indexing code; only embed_texts()/embed_query()
+    reach for this, and only after the hosted call has already failed."""
+    return OpenAIEmbeddings(
+        model=settings.LOCAL_EMBEDDING_MODEL,
+        check_embedding_ctx_length=False,
+        **_client_kwargs(settings.LOCAL_BASE_URL, settings.LOCAL_API_KEY),
     )
 
 
@@ -315,10 +335,27 @@ def chat_json(
 def embed_texts(texts: list[str]) -> list[list[float]]:
     if not texts:
         return []
-    return with_timeout(get_embeddings().embed_documents, texts)
+    try:
+        return with_timeout(get_embeddings().embed_documents, texts)
+    except Exception as exc:  # noqa: BLE001 - hosted outage; try the stopgap, not silence
+        log.warning(
+            "hosted embeddings failed (%s) -> falling back to local %s for %d chunk(s). "
+            "These are in a DIFFERENT vector space than the rest of Chroma — reseed "
+            "once the hosted gateway recovers.",
+            exc, settings.LOCAL_EMBEDDING_MODEL, len(texts),
+        )
+        return with_timeout(_local_embeddings().embed_documents, texts)
 
 
 def embed_query(text: str) -> list[float]:
     if not text or not text.strip():
         return []
-    return with_timeout(get_embeddings().embed_query, text)
+    try:
+        return with_timeout(get_embeddings().embed_query, text)
+    except Exception as exc:  # noqa: BLE001 - hosted outage; try the stopgap, not silence
+        log.warning(
+            "hosted embeddings failed (%s) -> falling back to local %s for a query. "
+            "Results will be unreliable against a hosted-embedded index until reseeded.",
+            exc, settings.LOCAL_EMBEDDING_MODEL,
+        )
+        return with_timeout(_local_embeddings().embed_query, text)
