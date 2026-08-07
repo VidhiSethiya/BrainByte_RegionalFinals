@@ -14,7 +14,6 @@ import { useQuery } from "@tanstack/react-query";
 import {
   Alert,
   Card,
-  DatePicker,
   Drawer,
   Empty,
   Flex,
@@ -26,7 +25,6 @@ import {
   Button,
   Typography,
 } from "antd";
-import dayjs, { type Dayjs } from "dayjs";
 import { useMemo, useState } from "react";
 
 import { api, type RetrievedChunk, type TicketListParams } from "../api/client";
@@ -43,19 +41,22 @@ import { isManagerRole } from "../layouts/AppLayout";
 import { useUiStore } from "../store/ui";
 
 function toParams(filters: ReturnType<typeof useUiStore.getState>["historyFilters"]): TicketListParams {
-  const { q, page, page_size, sort, order, from, to, ...rest } = filters;
+  const { q, page, page_size, sort, order, from: _from, to: _to, state, ...rest } = filters;
+  // Live list API ignores from/to and has no `state` column — map closed/open to status.
+  const filter: Record<string, string> = Object.fromEntries(
+    Object.entries(rest).filter(([, value]) => value !== undefined)
+  ) as Record<string, string>;
+  if (state === "closed" && !filter.status) {
+    // Prefer routed/synced/failed as "done" history; user can still pick a status.
+    filter.status = "routed";
+  }
   return {
     page,
     page_size,
     sort,
     order,
     q,
-    from,
-    to,
-    filter: Object.fromEntries(Object.entries(rest).filter(([, value]) => value !== undefined)) as Record<
-      string,
-      string
-    >,
+    filter,
   };
 }
 
@@ -92,16 +93,13 @@ export default function History() {
     enabled: !!similarFor,
   });
 
-  const range: [Dayjs, Dayjs] | undefined =
-    filters.from && filters.to ? [dayjs(filters.from), dayjs(filters.to)] : undefined;
-
   return (
     <Flex vertical gap={24}>
       <Flex align="flex-end" justify="space-between" gap={16} wrap>
         <Flex vertical gap={4}>
           <h1 className="page-title">History</h1>
           <p className="page-subtitle">
-            Closed and synced tickets, with the decision, the override and the outcome on each one.
+            Tickets with decisions, overrides and outcomes. Search by SCRUM key or title.
           </p>
         </Flex>
         <Space>
@@ -124,7 +122,7 @@ export default function History() {
         <Flex gap={8} wrap style={{ marginBottom: 16 }}>
           <Input.Search
             allowClear
-            placeholder="Search ticket id or title"
+            placeholder="Search SCRUM-… or title"
             style={{ maxWidth: 280 }}
             defaultValue={filters.q}
             onSearch={(q) => setFilters({ q: q || undefined })}
@@ -133,15 +131,20 @@ export default function History() {
             style={{ width: 150 }}
             value={filters.state ?? "all"}
             options={[
-              { value: "closed", label: "Closed" },
+              { value: "closed", label: "Routed (history)" },
               { value: "open", label: "Still open" },
               { value: "all", label: "All states" },
             ]}
-            onChange={(state) => setFilters({ state })}
+            onChange={(state) =>
+              setFilters({
+                state,
+                status: state === "open" ? undefined : filters.status,
+              })
+            }
           />
           <Select
             allowClear
-            placeholder="Severity"
+            placeholder="Priority"
             style={{ width: 150 }}
             value={filters.severity}
             options={SEVERITY_OPTIONS}
@@ -165,7 +168,7 @@ export default function History() {
             style={{ width: 150 }}
             value={filters.status}
             options={STATUS_OPTIONS}
-            onChange={(status) => setFilters({ status })}
+            onChange={(status) => setFilters({ status, state: status ? "all" : filters.state })}
           />
           <Select
             allowClear
@@ -183,15 +186,6 @@ export default function History() {
             value={filters.environment}
             options={ENVIRONMENT_OPTIONS}
             onChange={(environment) => setFilters({ environment })}
-          />
-          <DatePicker.RangePicker
-            value={range}
-            onChange={(dates) =>
-              setFilters({
-                from: dates?.[0]?.startOf("day").toISOString(),
-                to: dates?.[1]?.endOf("day").toISOString(),
-              })
-            }
           />
         </Flex>
 

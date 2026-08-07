@@ -92,10 +92,11 @@ export default function GraphRunner({ nodes, animate = true, retries = 0, runnin
   if (!nodes?.length) {
     return (
       <Flex vertical gap={8} align="center" style={{ padding: 32 }}>
-        <Typography.Text type="secondary">The pipeline runs here.</Typography.Text>
+        <Typography.Text type="secondary">
+          Decision ready — per-node graph trace is not streamed by this backend.
+        </Typography.Text>
         <Typography.Text type="secondary" style={{ fontSize: 13, textAlign: "center" }}>
-          Paste a ticket on the left and press Triage — ten agents, each with its own latency,
-          token count and model tier.
+          Live triage returns the final decision; open Control Tower → Sync Now for Jira SCRUM issues.
         </Typography.Text>
       </Flex>
     );

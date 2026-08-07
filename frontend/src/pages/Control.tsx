@@ -8,7 +8,7 @@
  * nobody would notice.
  */
 
-import { CheckOutlined, ReloadOutlined } from "@ant-design/icons";
+import { CheckOutlined, CloudSyncOutlined, ReloadOutlined } from "@ant-design/icons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Alert,
@@ -26,6 +26,7 @@ import {
   Skeleton,
   Space,
   Table,
+  Tag,
   Tooltip,
   Typography,
 } from "antd";
@@ -44,7 +45,7 @@ import {
   YAxis,
 } from "recharts";
 
-import { api, type Severity, type TicketRow } from "../api/client";
+import { ApiError, api, type Severity, type TicketRow } from "../api/client";
 import {
   CHART_HEIGHT,
   GRID,
@@ -65,7 +66,7 @@ import SeverityTag, {
 import StatTile from "../components/StatTile";
 import { useUiStore } from "../store/ui";
 
-const SEVERITY_TONE = { S1: "error", S2: "warning", S3: "info", S4: "default" } as const;
+const SEVERITY_TONE = { Highest: "error", High: "warning", Medium: "info", Low: "default" } as const;
 
 function ChartCard({
   title,
@@ -112,7 +113,14 @@ export default function Control() {
   });
 
   const approvalParams = useMemo(
-    () => ({ page: 1, page_size: 10, sort: "priority_score", order: "desc" as const, filter: { needs_human: "true" } }),
+    () => ({
+      page: 1,
+      page_size: 20,
+      sort: "priority_score",
+      order: "desc" as const,
+      // Human gate: awaiting_approval OR needs_human (backend may set either).
+      filter: { status: "awaiting_approval" },
+    }),
     []
   );
 
@@ -127,13 +135,49 @@ export default function Control() {
       queryClient.invalidateQueries({ queryKey: [key] })
     );
 
+  const syncNow = useMutation({
+    mutationFn: () => {
+      toast.open({
+        type: "loading",
+        content: "Syncing Jira — pull + triage can take several minutes…",
+        key: "jira-sync",
+        duration: 0,
+      });
+      return api.syncNow();
+    },
+    onSuccess: ({ data }) => {
+      const watermark = data.watermark ? ` · watermark ${data.watermark}` : "";
+      toast.open({
+        type: "success",
+        content: `Jira sync: pulled ${data.pulled}, triaged ${data.triaged}, failed ${data.failed}${watermark}`,
+        key: "jira-sync",
+        duration: 8,
+      });
+      if (data.error) toast.warning(data.error);
+      invalidate();
+    },
+    onError: (error: Error) =>
+      toast.open({
+        type: "error",
+        content: error.message || "Jira sync failed",
+        key: "jira-sync",
+        duration: 6,
+      }),
+  });
+
   const approve = useMutation({
     mutationFn: (id: string) => api.approve(id),
     onSuccess: ({ data }) => {
-      toast.success(`Approved — routed to ${TEAM_LABEL[data.assigned_team ?? "ops"]}`);
+      toast.success(`Approved — routed to ${TEAM_LABEL[(data.assigned_team as keyof typeof TEAM_LABEL) ?? "ops"] ?? data.assigned_team}`);
       invalidate();
     },
-    onError: (error: Error) => toast.error(error.message),
+    onError: (error: Error) => {
+      if (error instanceof ApiError && error.status === 409) {
+        toast.error(error.message || "Ticket is not ready to approve (needs priority + team).");
+        return;
+      }
+      toast.error(error.message);
+    },
   });
 
   const override = useMutation({
@@ -191,13 +235,25 @@ export default function Control() {
             has been wrong.
           </p>
         </Flex>
-        <Button icon={<ReloadOutlined />} loading={analytics.isFetching} onClick={() => analytics.refetch()}>
-          Refresh
-        </Button>
+        <Space>
+          <Tooltip title="Pull new/updated issues from Jira and run triage (may take several minutes).">
+            <Button
+              type="primary"
+              icon={<CloudSyncOutlined />}
+              loading={syncNow.isPending}
+              onClick={() => syncNow.mutate()}
+            >
+              Sync Now
+            </Button>
+          </Tooltip>
+          <Button icon={<ReloadOutlined />} loading={analytics.isFetching} onClick={() => analytics.refetch()}>
+            Refresh
+          </Button>
+        </Space>
       </Flex>
 
       <Row gutter={[16, 16]}>
-        {(["S1", "S2", "S3", "S4"] as Severity[]).map((severity) => (
+        {(["Highest", "High", "Medium", "Low"] as Severity[]).map((severity) => (
           <Col xs={12} md={6} xl={3} key={severity}>
             <StatTile
               label={`${severity} open`}
@@ -256,10 +312,10 @@ export default function Control() {
         </Col>
         <Col xs={12} md={6} xl={3}>
           <StatTile
-            label="Severity MAE"
+            label="Priority MAE"
             value={data ? data.severity_mae.toFixed(2) : null}
             loading={loading}
-            hint="Mean absolute error in severity levels"
+            hint="Mean absolute error in Priority levels (Highest=1 … Low=4)"
           />
         </Col>
         <Col xs={12} md={6} xl={3}>
@@ -289,7 +345,7 @@ export default function Control() {
 
       <Row gutter={[16, 16]}>
         <Col xs={24} xl={12}>
-          <ChartCard title="Open tickets by severity" loading={loading} empty={!data?.by_severity.length}>
+          <ChartCard title="Open tickets by Priority" loading={loading} empty={!data?.by_severity.length}>
             <BarChart data={data?.by_severity ?? []}>
               <CartesianGrid stroke={GRID} strokeDasharray="3 3" vertical={false} />
               <XAxis dataKey="severity" {...axisProps} />
@@ -381,9 +437,15 @@ export default function Control() {
               width: 130,
               render: (value: string) => <span className="data">{value}</span>,
             },
+            {
+              title: "Source",
+              dataIndex: "source",
+              width: 80,
+              render: (value: string) => <Tag style={{ marginInlineEnd: 0 }}>{value}</Tag>,
+            },
             { title: "Title", dataIndex: "title", ellipsis: true },
             {
-              title: "Severity",
+              title: "Priority",
               dataIndex: "severity",
               width: 136,
               render: (_v, row) => <SeverityTag severity={row.severity} />,
@@ -409,8 +471,8 @@ export default function Control() {
                 <Typography.Text type="secondary" style={{ fontSize: 13 }}>
                   {row.confidence < 0.7
                     ? "Confidence below the routing gate"
-                    : row.severity === "S1"
-                      ? "S1 on a production path always needs a human"
+                    : row.severity === "Highest"
+                      ? "Highest Priority on a production path always needs a human"
                       : "Held by policy for manager approval"}
                 </Typography.Text>
               ),
@@ -526,7 +588,7 @@ export default function Control() {
           <Form.Item name="field" label={<span className="label">Field</span>}>
             <Select
               options={[
-                { value: "severity", label: "Severity" },
+                { value: "severity", label: "Priority" },
                 { value: "assigned_team", label: "Assigned team" },
               ]}
               onChange={() => form.setFieldValue("new_value", undefined)}

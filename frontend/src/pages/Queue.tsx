@@ -84,9 +84,16 @@ export default function Queue() {
     queryKey: ["triage-analytics"],
     queryFn: () => api.triageAnalytics().then((r) => r.data),
     refetchInterval: 10_000,
+    // Engineers get 403 on /analytics/triage — use queue meta instead.
+    enabled: manager,
   });
 
   const rows: TicketRow[] = queue.data?.data ?? [];
+  const queueTotal = queue.data?.meta?.total ?? rows.length;
+  const s1FromQueue = rows.filter((row) => row.severity === "Highest").length;
+  const awaitingFromQueue = rows.filter(
+    (row) => row.needs_human || row.status === "awaiting_approval"
+  ).length;
 
   // j/k/Enter/a/o//: the whole queue is workable without a mouse.
   useEffect(() => {
@@ -129,8 +136,15 @@ export default function Queue() {
   }, [rows, selectedTicketId, drawerOpen, openTicket, selectTicket]);
 
   const open = analytics.data;
-  const s1Open = open?.by_severity.find((entry) => entry.severity === "S1")?.count;
-  const totalOpen = open?.by_severity.reduce((sum, entry) => sum + entry.count, 0);
+  const s1Open = manager
+    ? open?.by_severity.find((entry) => entry.severity === "Highest")?.count
+    : s1FromQueue;
+  const totalOpen = manager
+    ? open?.by_severity.reduce((sum, entry) => sum + entry.count, 0)
+    : queueTotal;
+  const slaAtRisk = manager ? open?.sla_at_risk : null;
+  const awaitingReview = manager ? open?.awaiting_approval : awaitingFromQueue;
+  const tilesLoading = manager ? analytics.isPending : queue.isPending;
 
   return (
     <Flex vertical gap={24}>
@@ -174,40 +188,44 @@ export default function Queue() {
             value={totalOpen}
             icon={<FileTextOutlined />}
             caption="Active tickets"
-            loading={analytics.isPending}
-            hint="Tickets not yet resolved"
+            loading={tilesLoading}
+            hint={manager ? "Tickets not yet resolved" : "Open tickets in your team queue (this page)"}
           />
         </Col>
         <Col xs={12} lg={6}>
           <StatTile
-            label="S1 open"
+            label="Highest open"
             value={s1Open}
             icon={<ExclamationCircleOutlined />}
             caption="Critical priority"
             tone={s1Open ? "error" : "default"}
-            loading={analytics.isPending}
+            loading={tilesLoading}
             hint="Critical incidents currently open"
           />
         </Col>
         <Col xs={12} lg={6}>
           <StatTile
             label="SLA at risk"
-            value={open?.sla_at_risk}
+            value={slaAtRisk}
             icon={<SafetyCertificateOutlined />}
-            caption="Needs attention"
-            tone={open?.sla_at_risk ? "warning" : "default"}
-            loading={analytics.isPending}
-            hint="Under 30 minutes to the response target"
+            caption={manager ? "Needs attention" : "Manager view only"}
+            tone={slaAtRisk ? "warning" : "default"}
+            loading={tilesLoading}
+            hint={
+              manager
+                ? "Under 30 minutes to the response target"
+                : "SLA aggregates require manager analytics access"
+            }
           />
         </Col>
         <Col xs={12} lg={6}>
           <StatTile
             label="Awaiting review"
-            value={open?.awaiting_approval}
+            value={awaitingReview}
             icon={<HourglassOutlined />}
             caption="Pending review"
-            tone={open?.awaiting_approval ? "warning" : "default"}
-            loading={analytics.isPending}
+            tone={awaitingReview ? "warning" : "default"}
+            loading={tilesLoading}
             hint="Decisions the system stopped and handed to a human"
           />
         </Col>
@@ -225,7 +243,7 @@ export default function Queue() {
           />
           <Select
             allowClear
-            placeholder="Severity"
+            placeholder="Priority"
             style={{ width: 160 }}
             value={filters.severity}
             options={SEVERITY_OPTIONS}

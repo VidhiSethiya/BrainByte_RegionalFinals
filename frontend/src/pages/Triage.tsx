@@ -20,26 +20,22 @@ import {
   Flex,
   Form,
   Input,
-  Progress,
   Row,
   Select,
   Space,
-  Table,
   Tabs,
   Tag,
 } from "antd";
-import { useMemo, useState } from "react";
+import { useState } from "react";
 
 import {
   api,
-  type Team,
   type TicketDetail,
   type TriageRunResult,
 } from "../api/client";
 import { DecisionBody } from "../components/DecisionDrawer";
 import GraphRunner from "../components/GraphRunner";
 import { TEAM_LABEL } from "../components/SeverityTag";
-import StatTile from "../components/StatTile";
 import VoiceButton from "../components/VoiceButton";
 
 const ENVIRONMENTS = [
@@ -85,16 +81,18 @@ const SAMPLES = {
 
 /** The run result carries everything the decision panel needs — reshape, don't refetch. */
 function toDetail(result: TriageRunResult): TicketDetail {
-  const blocked = result.nodes.some((node) => node.status === "failed");
+  const guarded =
+    !result.decision &&
+    (result.nodes.some((node) => node.status === "failed") || result.ticket.status === "failed");
   return {
     ticket: result.ticket,
-    body_masked: "",
-    decision: blocked ? null : result.decision,
-    guardrails_fired: blocked
-      ? [{ type: "input_guard", detail: "The ticket body matched a prompt-injection pattern and was not sent to the model." }]
+    body_masked: result.ticket.body_masked ?? "",
+    decision: result.decision,
+    guardrails_fired: guarded
+      ? [{ type: "input_guard", detail: "No decision was produced for this ticket." }]
       : [],
-    model: result.decision?.severity === "S1" ? "genailab-maas-gpt-5.1" : "genailab-maas-gpt-4.1-mini",
-    tier: result.decision?.severity === "S1" ? "deep" : "standard",
+    model: result.decision?.severity === "Highest" ? "genailab-maas-gpt-5.1" : "genailab-maas-gpt-4.1",
+    tier: result.decision?.severity === "Highest" ? "deep" : "standard",
     latency_ms: result.total_ms,
     total_tokens: result.total_tokens,
     cost_usd: result.cost_usd,
@@ -109,17 +107,25 @@ function LiveTriage() {
   const [result, setResult] = useState<TriageRunResult | null>(null);
 
   const run = useMutation({
-    mutationFn: (values: { title: string; description: string; application?: string; environment?: string }) =>
-      api.createTicket(values),
+    mutationFn: (values: {
+      title: string;
+      description: string;
+      application?: string;
+      environment?: string;
+    }) =>
+      api.createTicket({
+        title: values.title,
+        body: values.description,
+        application: values.application,
+        environment: values.environment,
+      }),
     onSuccess: ({ data }) => {
       setResult(data);
-      const blocked = data.nodes.some((node) => node.status === "failed");
-      if (blocked || !data.decision) toast.warning("Blocked by guardrails before a decision was made");
+      if (!data.decision) toast.warning("No decision produced — check guardrails or ticket status");
       else
         toast.success(
-          `Routed to ${TEAM_LABEL[data.decision.assigned_team]} · ${data.decision.severity} · ${(
-            data.total_ms / 1000
-          ).toFixed(1)}s`
+          `Routed to ${TEAM_LABEL[data.decision.assigned_team]} · ${data.decision.severity}` +
+            (data.total_ms ? ` · ${(data.total_ms / 1000).toFixed(1)}s` : "")
         );
       ["tickets", "team-queue", "triage-analytics"].forEach((key) =>
         queryClient.invalidateQueries({ queryKey: [key] })
@@ -251,141 +257,15 @@ function LiveTriage() {
 }
 
 function BulkTriage() {
-  const { message: toast } = App.useApp();
-  const queryClient = useQueryClient();
-  const [count, setCount] = useState(10);
-
-  const run = useMutation({
-    mutationFn: (size: number) => api.bulkTriage(size),
-    onSuccess: ({ data }) => {
-      toast.success(
-        `${data.processed} tickets in ${(data.total_ms / 1000).toFixed(1)}s · ${(
-          (data.processed / data.total_ms) *
-          60_000
-        ).toFixed(0)} tickets/min`
-      );
-      ["tickets", "team-queue", "triage-analytics"].forEach((key) =>
-        queryClient.invalidateQueries({ queryKey: [key] })
-      );
-    },
-    onError: (error: Error) => toast.error(error.message),
-  });
-
-  const summary = useMemo(() => {
-    const results = run.data?.data.results ?? [];
-    const byTeam = new Map<Team, { team: Team; count: number; cost: number; s1: number }>();
-    results.forEach((item) => {
-      if (!item.decision) return;
-      const team = item.decision.assigned_team;
-      const entry = byTeam.get(team) ?? { team, count: 0, cost: 0, s1: 0 };
-      entry.count += 1;
-      entry.cost += item.cost_usd;
-      if (item.decision.severity === "S1") entry.s1 += 1;
-      byTeam.set(team, entry);
-    });
-    return Array.from(byTeam.values());
-  }, [run.data]);
-
-  const processed = run.data?.data.processed ?? 0;
-  const totalMs = run.data?.data.total_ms ?? 0;
-  const throughput = totalMs ? (processed / totalMs) * 60_000 : null;
-  const totalCost = (run.data?.data.results ?? []).reduce((sum, item) => sum + item.cost_usd, 0);
-
   return (
-    <Flex vertical gap={24}>
-      <Card size="small">
-        <Flex align="center" gap={16} wrap>
-          <Select
-            value={count}
-            onChange={setCount}
-            style={{ width: 140 }}
-            options={[10, 25, 50].map((value) => ({ value, label: `${value} tickets` }))}
-          />
-          <Button type="primary" loading={run.isPending} onClick={() => run.mutate(count)}>
-            Run batch
-          </Button>
-          {run.isPending && (
-            <Progress percent={99} status="active" showInfo={false} style={{ flex: 1, minWidth: 200 }} />
-          )}
-        </Flex>
-      </Card>
-
-      <Row gutter={[16, 16]}>
-        <Col xs={12} lg={6}>
-          <StatTile label="Processed" value={run.data ? processed : null} loading={run.isPending} />
-        </Col>
-        <Col xs={12} lg={6}>
-          <StatTile
-            label="Throughput"
-            value={throughput ? throughput.toFixed(0) : null}
-            suffix="tickets/min"
-            loading={run.isPending}
-          />
-        </Col>
-        <Col xs={12} lg={6}>
-          <StatTile
-            label="Wall clock"
-            value={run.data ? (totalMs / 1000).toFixed(1) : null}
-            suffix="s"
-            loading={run.isPending}
-          />
-        </Col>
-        <Col xs={12} lg={6}>
-          <StatTile
-            label="Batch cost"
-            value={run.data ? `$${totalCost.toFixed(3)}` : null}
-            loading={run.isPending}
-          />
-        </Col>
-      </Row>
-
-      <Card size="small" title="Routed by team">
-        {run.error ? (
-          <Alert
-            type="error"
-            showIcon
-            message="Batch failed"
-            description={(run.error as Error).message}
-            action={
-              <Button size="small" onClick={() => run.mutate(count)}>
-                Retry
-              </Button>
-            }
-          />
-        ) : (
-          <Table
-            size="small"
-            rowKey="team"
-            loading={run.isPending}
-            dataSource={summary}
-            pagination={false}
-            scroll={{ x: true }}
-            locale={{ emptyText: "Run a batch to see how the work distributes across the four teams." }}
-            columns={[
-              { title: "Team", dataIndex: "team", render: (team: Team) => TEAM_LABEL[team] },
-              {
-                title: "Tickets",
-                dataIndex: "count",
-                align: "right",
-                render: (value: number) => <span className="tabular">{value}</span>,
-              },
-              {
-                title: "S1",
-                dataIndex: "s1",
-                align: "right",
-                render: (value: number) => <span className="tabular">{value}</span>,
-              },
-              {
-                title: "Cost",
-                dataIndex: "cost",
-                align: "right",
-                render: (value: number) => <span className="tabular">${value.toFixed(4)}</span>,
-              },
-            ]}
-          />
-        )}
-      </Card>
-    </Flex>
+    <Card size="small">
+      <Alert
+        type="info"
+        showIcon
+        message="Bulk triage is not available on the live backend yet"
+        description="Use Live triage for a single ticket, or Control Tower ? Sync Now to pull Jira issues. The /tickets/bulk route ships in a later phase."
+      />
+    </Card>
   );
 }
 
@@ -395,8 +275,7 @@ export default function Triage() {
       <Flex vertical gap={4}>
         <h1 className="page-title">Triage</h1>
         <p className="page-subtitle">
-          Run one ticket through the pipeline and watch every agent, or push a batch through to see
-          how it scales.
+          Run one ticket through the pipeline, or sync Jira from Control Tower for live SCRUM issues.
         </p>
       </Flex>
 

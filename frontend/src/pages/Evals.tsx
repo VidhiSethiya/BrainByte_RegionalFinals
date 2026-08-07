@@ -28,7 +28,7 @@ import { useState } from "react";
 import { api, type ListParams, type Severity } from "../api/client";
 import StatTile from "../components/StatTile";
 
-const SEVERITIES: Severity[] = ["S1", "S2", "S3", "S4"];
+const SEVERITIES: Severity[] = ["Highest", "High", "Medium", "Low"];
 
 /** One scored question from the evaluation set. */
 interface EvalRow {
@@ -62,7 +62,7 @@ function ConfusionMatrix({ cells }: { cells: { predicted: Severity; actual: Seve
 
   return (
     <Flex vertical gap={8}>
-      <table className="confusion" role="table" aria-label="Severity confusion matrix">
+      <table className="confusion" role="table" aria-label="Priority confusion matrix">
         <thead>
           <tr>
             <th scope="col" className="label">
@@ -224,7 +224,7 @@ export default function Evals() {
               </Col>
               <Col xs={12}>
                 <StatTile
-                  label="Severity MAE"
+                  label="Priority MAE"
                   value={triage ? triage.severity_mae.toFixed(2) : null}
                   loading={analytics.isPending}
                   hint="Mean absolute error in severity levels"
@@ -245,7 +245,7 @@ export default function Evals() {
         </Col>
 
         <Col xs={24} xl={12}>
-          <Card size="small" title="Severity confusion matrix">
+          <Card size="small" title="Priority confusion matrix">
             {analytics.isPending ? (
               <Skeleton active paragraph={{ rows: 4 }} />
             ) : triage?.severity_confusion?.length ? (

@@ -86,33 +86,33 @@ interface Seed {
 }
 
 const SEEDS: Seed[] = [
-  { title: "RDS primary failover loop in eu-west-1 — connections dropping", team: "aws", severity: "S1", category: "Database", application: "Payments API", environment: "prod", status: "awaiting_approval", confidence: 0.91, ageMins: 12, slaMins: 60, needsHuman: true },
-  { title: "S3 lifecycle policy deleted current-version objects in reporting bucket", team: "aws", severity: "S2", category: "Storage", application: "Reporting", environment: "prod", status: "routed", confidence: 0.86, ageMins: 41, slaMins: 240 },
-  { title: "ALB 502s spiking after target-group deploy", team: "aws", severity: "S2", category: "Networking", application: "Checkout", environment: "prod", status: "triaged", confidence: 0.78, ageMins: 96, slaMins: 240 },
-  { title: "EKS node group stuck in NotReady after AMI upgrade", team: "aws", severity: "S3", category: "Compute", application: "Batch Jobs", environment: "uat", status: "synced", confidence: 0.83, ageMins: 210, slaMins: 480 },
-  { title: "CloudWatch alarm noise — duplicate alerting on the same metric", team: "aws", severity: "S4", category: "Observability", application: "Platform", environment: "prod", status: "resolved", confidence: 0.94, ageMins: 2880, slaMins: 1440, resolutionMinutes: 340 },
-  { title: "IAM role trust policy blocks cross-account assume from CI", team: "aws", severity: "S3", category: "Access", application: "CI/CD", environment: "dev", status: "resolved", confidence: 0.69, ageMins: 4320, slaMins: 480, overriddenBy: "manager", overrideReason: "Access issues route to Ops, not AWS — model over-indexed on the word 'IAM'.", resolutionMinutes: 155 },
+  { title: "RDS primary failover loop in eu-west-1 — connections dropping", team: "aws", severity: "Highest", category: "Database", application: "Payments API", environment: "prod", status: "awaiting_approval", confidence: 0.91, ageMins: 12, slaMins: 60, needsHuman: true },
+  { title: "S3 lifecycle policy deleted current-version objects in reporting bucket", team: "aws", severity: "High", category: "Storage", application: "Reporting", environment: "prod", status: "routed", confidence: 0.86, ageMins: 41, slaMins: 240 },
+  { title: "ALB 502s spiking after target-group deploy", team: "aws", severity: "High", category: "Networking", application: "Checkout", environment: "prod", status: "triaged", confidence: 0.78, ageMins: 96, slaMins: 240 },
+  { title: "EKS node group stuck in NotReady after AMI upgrade", team: "aws", severity: "Medium", category: "Compute", application: "Batch Jobs", environment: "uat", status: "synced", confidence: 0.83, ageMins: 210, slaMins: 480 },
+  { title: "CloudWatch alarm noise — duplicate alerting on the same metric", team: "aws", severity: "Low", category: "Observability", application: "Platform", environment: "prod", status: "resolved", confidence: 0.94, ageMins: 2880, slaMins: 1440, resolutionMinutes: 340 },
+  { title: "IAM role trust policy blocks cross-account assume from CI", team: "aws", severity: "Medium", category: "Access", application: "CI/CD", environment: "dev", status: "resolved", confidence: 0.69, ageMins: 4320, slaMins: 480, overriddenBy: "manager", overrideReason: "Access issues route to Ops, not AWS — model over-indexed on the word 'IAM'.", resolutionMinutes: 155 },
 
-  { title: "AKS ingress controller crash-looping after cert rotation", team: "azure", severity: "S1", category: "Networking", application: "Customer Portal", environment: "prod", status: "routed", confidence: 0.88, ageMins: 22, slaMins: 60 },
-  { title: "Azure AD conditional access blocking service principal sign-in", team: "azure", severity: "S2", category: "Access", application: "Integrations", environment: "prod", status: "failed", confidence: 0.74, ageMins: 130, slaMins: 240 },
-  { title: "Blob storage throttling on nightly export job", team: "azure", severity: "S3", category: "Storage", application: "Data Export", environment: "prod", status: "triaged", confidence: 0.81, ageMins: 260, slaMins: 480 },
-  { title: "App Service slot swap left stale configuration", team: "azure", severity: "S3", category: "Deployment", application: "Marketing Site", environment: "uat", status: "synced", confidence: 0.9, ageMins: 520, slaMins: 480 },
-  { title: "Cosmos DB RU exhaustion during month-end close", team: "azure", severity: "S2", category: "Database", application: "Finance", environment: "prod", status: "resolved", confidence: 0.87, ageMins: 5760, slaMins: 240, resolutionMinutes: 190 },
-  { title: "Log Analytics workspace ingestion delay over 20 minutes", team: "azure", severity: "S4", category: "Observability", application: "Platform", environment: "prod", status: "resolved", confidence: 0.66, ageMins: 7200, slaMins: 1440, overriddenBy: "manager", overrideReason: "Downgraded from S3 — ingestion delay had no customer impact and self-recovered.", resolutionMinutes: 95 },
+  { title: "AKS ingress controller crash-looping after cert rotation", team: "azure", severity: "Highest", category: "Networking", application: "Customer Portal", environment: "prod", status: "routed", confidence: 0.88, ageMins: 22, slaMins: 60 },
+  { title: "Azure AD conditional access blocking service principal sign-in", team: "azure", severity: "High", category: "Access", application: "Integrations", environment: "prod", status: "failed", confidence: 0.74, ageMins: 130, slaMins: 240 },
+  { title: "Blob storage throttling on nightly export job", team: "azure", severity: "Medium", category: "Storage", application: "Data Export", environment: "prod", status: "triaged", confidence: 0.81, ageMins: 260, slaMins: 480 },
+  { title: "App Service slot swap left stale configuration", team: "azure", severity: "Medium", category: "Deployment", application: "Marketing Site", environment: "uat", status: "synced", confidence: 0.9, ageMins: 520, slaMins: 480 },
+  { title: "Cosmos DB RU exhaustion during month-end close", team: "azure", severity: "High", category: "Database", application: "Finance", environment: "prod", status: "resolved", confidence: 0.87, ageMins: 5760, slaMins: 240, resolutionMinutes: 190 },
+  { title: "Log Analytics workspace ingestion delay over 20 minutes", team: "azure", severity: "Low", category: "Observability", application: "Platform", environment: "prod", status: "resolved", confidence: 0.66, ageMins: 7200, slaMins: 1440, overriddenBy: "manager", overrideReason: "Downgraded from S3 — ingestion delay had no customer impact and self-recovered.", resolutionMinutes: 95 },
 
-  { title: "GKE workload identity binding missing after namespace recreate", team: "gcp", severity: "S2", category: "Access", application: "Recommendations", environment: "prod", status: "awaiting_approval", confidence: 0.63, ageMins: 33, slaMins: 240, needsHuman: true },
-  { title: "BigQuery scheduled query failing on partition filter requirement", team: "gcp", severity: "S3", category: "Database", application: "Analytics", environment: "prod", status: "triaged", confidence: 0.79, ageMins: 145, slaMins: 480 },
-  { title: "Cloud Run cold starts breaching latency budget", team: "gcp", severity: "S3", category: "Compute", application: "Search API", environment: "prod", status: "routed", confidence: 0.84, ageMins: 300, slaMins: 480 },
-  { title: "Pub/Sub subscription backlog growing on dead-letter topic", team: "gcp", severity: "S2", category: "Messaging", application: "Order Events", environment: "prod", status: "synced", confidence: 0.89, ageMins: 480, slaMins: 240 },
-  { title: "Cloud SQL maintenance window overlaps peak traffic", team: "gcp", severity: "S4", category: "Database", application: "CRM", environment: "uat", status: "resolved", confidence: 0.92, ageMins: 8640, slaMins: 1440, resolutionMinutes: 60 },
-  { title: "VPC peering route missing to the shared services project", team: "gcp", severity: "S3", category: "Networking", application: "Platform", environment: "dev", status: "resolved", confidence: 0.71, ageMins: 10080, slaMins: 480, resolutionMinutes: 220 },
+  { title: "GKE workload identity binding missing after namespace recreate", team: "gcp", severity: "High", category: "Access", application: "Recommendations", environment: "prod", status: "awaiting_approval", confidence: 0.63, ageMins: 33, slaMins: 240, needsHuman: true },
+  { title: "BigQuery scheduled query failing on partition filter requirement", team: "gcp", severity: "Medium", category: "Database", application: "Analytics", environment: "prod", status: "triaged", confidence: 0.79, ageMins: 145, slaMins: 480 },
+  { title: "Cloud Run cold starts breaching latency budget", team: "gcp", severity: "Medium", category: "Compute", application: "Search API", environment: "prod", status: "routed", confidence: 0.84, ageMins: 300, slaMins: 480 },
+  { title: "Pub/Sub subscription backlog growing on dead-letter topic", team: "gcp", severity: "High", category: "Messaging", application: "Order Events", environment: "prod", status: "synced", confidence: 0.89, ageMins: 480, slaMins: 240 },
+  { title: "Cloud SQL maintenance window overlaps peak traffic", team: "gcp", severity: "Low", category: "Database", application: "CRM", environment: "uat", status: "resolved", confidence: 0.92, ageMins: 8640, slaMins: 1440, resolutionMinutes: 60 },
+  { title: "VPC peering route missing to the shared services project", team: "gcp", severity: "Medium", category: "Networking", application: "Platform", environment: "dev", status: "resolved", confidence: 0.71, ageMins: 10080, slaMins: 480, resolutionMinutes: 220 },
 
-  { title: "Jenkins agents offline — build queue at 40 and growing", team: "ops", severity: "S1", category: "CI/CD", application: "Build Farm", environment: "prod", status: "routed", confidence: 0.93, ageMins: 8, slaMins: 60 },
-  { title: "Certificate expiring in 6 days on the partner gateway", team: "ops", severity: "S2", category: "Security", application: "Partner Gateway", environment: "prod", status: "triaged", confidence: 0.95, ageMins: 60, slaMins: 240 },
-  { title: "Backup job skipped three consecutive nights without alerting", team: "ops", severity: "S2", category: "Backup", application: "Platform", environment: "prod", status: "failed", confidence: 0.82, ageMins: 180, slaMins: 240 },
-  { title: "Password reset request from an unverified requester", team: "ops", severity: "S4", category: "Access", application: "Service Desk", environment: "prod", status: "new", confidence: 0.42, ageMins: 5, slaMins: 1440 },
-  { title: "Monitoring agent version drift across 30 hosts", team: "ops", severity: "S4", category: "Observability", application: "Platform", environment: "prod", status: "synced", confidence: 0.88, ageMins: 1440, slaMins: 1440 },
-  { title: "Shared drive quota exhausted on the finance share", team: "ops", severity: "S3", category: "Storage", application: "File Services", environment: "prod", status: "resolved", confidence: 0.76, ageMins: 12960, slaMins: 480, overriddenBy: "manager", overrideReason: "Reassigned from Azure to Ops — the share is on-prem, not Azure Files.", resolutionMinutes: 130 },
+  { title: "Jenkins agents offline — build queue at 40 and growing", team: "ops", severity: "Highest", category: "CI/CD", application: "Build Farm", environment: "prod", status: "routed", confidence: 0.93, ageMins: 8, slaMins: 60 },
+  { title: "Certificate expiring in 6 days on the partner gateway", team: "ops", severity: "High", category: "Security", application: "Partner Gateway", environment: "prod", status: "triaged", confidence: 0.95, ageMins: 60, slaMins: 240 },
+  { title: "Backup job skipped three consecutive nights without alerting", team: "ops", severity: "High", category: "Backup", application: "Platform", environment: "prod", status: "failed", confidence: 0.82, ageMins: 180, slaMins: 240 },
+  { title: "Password reset request from an unverified requester", team: "ops", severity: "Low", category: "Access", application: "Service Desk", environment: "prod", status: "new", confidence: 0.42, ageMins: 5, slaMins: 1440 },
+  { title: "Monitoring agent version drift across 30 hosts", team: "ops", severity: "Low", category: "Observability", application: "Platform", environment: "prod", status: "synced", confidence: 0.88, ageMins: 1440, slaMins: 1440 },
+  { title: "Shared drive quota exhausted on the finance share", team: "ops", severity: "Medium", category: "Storage", application: "File Services", environment: "prod", status: "resolved", confidence: 0.76, ageMins: 12960, slaMins: 480, overriddenBy: "manager", overrideReason: "Reassigned from Azure to Ops — the share is on-prem, not Azure Files.", resolutionMinutes: 130 },
 ];
 
 const TICKETS: TicketRow[] = SEEDS.map((seed, index) => {
@@ -128,7 +128,7 @@ const TICKETS: TicketRow[] = SEEDS.map((seed, index) => {
     severity: seed.severity,
     priority_score: Math.max(
       4,
-      Math.min(99, { S1: 92, S2: 74, S3: 51, S4: 22 }[seed.severity] + ((index * 13) % 9) - 4)
+      Math.min(99, { Highest: 92, High: 74, Medium: 51, Low: 22 }[seed.severity] + ((index * 13) % 9) - 4)
     ),
     assigned_team: seed.status === "new" ? null : seed.team,
     status: seed.status,
@@ -225,8 +225,8 @@ function detailFor(ticket: TicketRow): TicketDetail {
       : ticket.status === "failed"
         ? [{ type: "sync_failure", detail: "Jira rejected the transition: field 'severity' is not on the screen." }]
         : [],
-    model: ticket.severity === "S1" ? "genailab-maas-gpt-5.1" : "genailab-maas-gpt-4.1-mini",
-    tier: ticket.severity === "S1" ? "deep" : ticket.severity === "S4" ? "fast" : "standard",
+    model: ticket.severity === "Highest" ? "genailab-maas-gpt-5.1" : "genailab-maas-gpt-4.1-mini",
+    tier: ticket.severity === "Highest" ? "deep" : ticket.severity === "Low" ? "fast" : "standard",
     latency_ms: 1800 + ((ticket.priority_score * 37) % 2600),
     total_tokens: 1200 + ((ticket.priority_score * 53) % 2400),
     cost_usd: Number((0.0009 + ((ticket.priority_score % 17) / 1000) * 0.4).toFixed(4)),
@@ -279,7 +279,7 @@ const NODE_SEQUENCE: Omit<GraphNode, "status">[] = [
   { name: "enrich", ms: 640, tokens: 0, tier: null, output_summary: "Retrieved 6 precedent tickets and 3 runbook chunks" },
   { name: "grade", ms: 310, tokens: 240, tier: "fast", output_summary: "Retrieval relevance 0.81 — above the 0.65 gate" },
   { name: "classify", ms: 890, tokens: 610, tier: "standard", output_summary: "Database / failover, subcategory prod" },
-  { name: "assess", ms: 1420, tokens: 980, tier: "deep", output_summary: "S1 · priority 92 — production payments path" },
+  { name: "assess", ms: 1420, tokens: 980, tier: "deep", output_summary: "Highest · score 92 — production payments path" },
   { name: "route", ms: 260, tokens: 180, tier: "fast", output_summary: "AWS — owning team for RDS in eu-west-1" },
   { name: "reflect", ms: 760, tokens: 520, tier: "standard", output_summary: "Self-check passed: severity consistent with the cited runbook" },
   { name: "verify", ms: 340, tokens: 210, tier: "fast", output_summary: "All three citations resolve to indexed chunks" },
@@ -424,7 +424,7 @@ function analytics(): TriageAnalytics {
   const categories = Array.from(new Set(visible.map((t) => t.category)));
 
   return {
-    by_severity: (["S1", "S2", "S3", "S4"] as Severity[]).map((severity) => ({
+    by_severity: (["Highest", "High", "Medium", "Low"] as Severity[]).map((severity) => ({
       severity,
       count: countBySeverity(severity),
     })),
@@ -456,8 +456,8 @@ function analytics(): TriageAnalytics {
     sla_at_risk: open.filter((t) => t.sla_due_at && Date.parse(t.sla_due_at) - NOW < 30 * 60_000).length,
     awaiting_approval: visible.filter((t) => t.needs_human && t.status === "awaiting_approval").length,
     tokens_today: 486_300,
-    severity_confusion: (["S1", "S2", "S3", "S4"] as Severity[]).flatMap((actual, row) =>
-      (["S1", "S2", "S3", "S4"] as Severity[]).map((predicted, col) => ({
+    severity_confusion: (["Highest", "High", "Medium", "Low"] as Severity[]).flatMap((actual, row) =>
+      (["Highest", "High", "Medium", "Low"] as Severity[]).map((predicted, col) => ({
         predicted,
         actual,
         // Heavy on the diagonal, and what error there is sits one level away —
@@ -475,7 +475,7 @@ function analytics(): TriageAnalytics {
         // A team override moves a team, a severity override moves a severity —
         // the two never share a value space.
         from: reroute ? PREVIOUS_TEAM[t.assigned_team ?? "ops"] : t.severity,
-        to: reroute ? TEAM_LABEL_MOCK[t.assigned_team ?? "ops"] : t.severity === "S4" ? "S3" : "S2",
+        to: reroute ? TEAM_LABEL_MOCK[t.assigned_team ?? "ops"] : t.severity === "Low" ? "Medium" : "High",
         by: t.overridden_by!,
         reason: t.override_reason!,
         at: iso(120 + index * 240),
@@ -538,7 +538,7 @@ const AUDIT_ROWS = Array.from({ length: 26 }, (_, index) => ({
   user_id: ["manager", "aws1", "ops1", "azure1", "system"][index % 5],
   resource: `INC00${12000 + index * 7}`,
   entry_hash: `${(index * 928371).toString(16).padStart(8, "0")}c41e7bb92f0a7d6e3f1${index}`,
-  details: { severity: "S2", team: "aws", confidence: 0.86 },
+  details: { severity: "High", team: "aws", confidence: 0.86 },
 }));
 
 const TRACES = Array.from({ length: 15 }, (_, index) => ({

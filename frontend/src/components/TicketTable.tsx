@@ -102,7 +102,7 @@ export default function TicketTable({
       ),
     },
     {
-      title: "Severity",
+      title: "Priority",
       dataIndex: "severity",
       width: 136,
       sorter: true,
@@ -121,10 +121,25 @@ export default function TicketTable({
     ...(variant === "queue"
       ? ([
           {
+            title: "Source",
+            dataIndex: "source",
+            width: 88,
+            render: (value: string) => (
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                {value || "—"}
+              </Typography.Text>
+            ),
+          },
+          {
             title: "SLA",
             dataIndex: "sla_due_at",
             width: 128,
-            render: (_value, row) => <SlaCountdown dueAt={row.sla_due_at} />,
+            render: (_value, row) =>
+              row.sla_due_at ? (
+                <SlaCountdown dueAt={row.sla_due_at} />
+              ) : (
+                <Typography.Text type="secondary">—</Typography.Text>
+              ),
           },
         ] as ColumnsType<TicketRow>)
       : []),

@@ -36,6 +36,7 @@ import {
   Tabs,
   Tag,
   Timeline,
+  Tooltip,
   Typography,
 } from "antd";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -43,8 +44,11 @@ import Markdown from "react-markdown";
 
 import {
   api,
+  ApiError,
+  type Severity,
   type Team,
   type TicketDetail,
+  type TicketStatus,
   type TimelineEvent,
 } from "../api/client";
 import SeverityTag, {
@@ -57,7 +61,7 @@ import SeverityTag, {
   TeamTag,
 } from "./SeverityTag";
 
-const TIMELINE_COLOR: Record<TimelineEvent["kind"], string> = {
+const TIMELINE_COLOR: Record<string, string> = {
   triaged: "blue",
   override: "gold",
   approved: "green",
@@ -67,7 +71,8 @@ const TIMELINE_COLOR: Record<TimelineEvent["kind"], string> = {
   blocked: "red",
 };
 
-function formatMinutes(minutes: number) {
+function formatMinutes(minutes: number | undefined | null) {
+  if (minutes == null || Number.isNaN(minutes)) return "—";
   if (minutes < 60) return `${minutes}m`;
   const hours = minutes / 60;
   return Number.isInteger(hours) ? `${hours}h` : `${hours.toFixed(1)}h`;
@@ -227,9 +232,14 @@ export function DecisionBody({
         </Typography.Title>
         <Space size={8} wrap>
           {/* No decision means no assessed severity — showing one would invent a fact. */}
-          {decision ? <SeverityTag severity={ticket.severity} /> : <Tag>Severity not assessed</Tag>}
+          {decision ? (
+            <SeverityTag severity={(decision.severity || ticket.severity) as Severity} />
+          ) : (
+            <Tag>Priority not assessed</Tag>
+          )}
           <StatusTag status={ticket.status} />
-          <TeamTag team={ticket.assigned_team} />
+          <TeamTag team={(decision?.assigned_team || ticket.assigned_team) as Team | null} />
+          <Tag style={{ marginInlineEnd: 0 }}>{ticket.source}</Tag>
           {ticket.overridden_by && <Tag color="warning">Overridden by {ticket.overridden_by}</Tag>}
         </Space>
       </Flex>
@@ -263,8 +273,8 @@ export function DecisionBody({
           {/* The one line a reader must get, before any detail. */}
           <div style={{ background: "var(--bg-surface-alt)", borderRadius: "var(--radius-md)", padding: 16 }}>
             <Typography.Text style={{ fontSize: 16, lineHeight: "24px" }}>
-              Routed to <strong>{TEAM_LABEL[decision.assigned_team]}</strong> as{" "}
-              <strong>{decision.severity}</strong>, priority{" "}
+              Routed to <strong>{TEAM_LABEL[decision.assigned_team]}</strong> as Priority{" "}
+              <strong>{decision.severity}</strong>, score{" "}
               <strong className="tabular">{decision.priority_score}</strong>, SLA{" "}
               <strong>{formatMinutes(decision.sla_target_mins)}</strong>, confidence{" "}
               <strong className="tabular">{(decision.confidence * 100).toFixed(0)}%</strong>.
@@ -396,18 +406,22 @@ export function DecisionBody({
               Reassign
             </Button>
             <Button disabled={blocked} onClick={() => setOverrideField("severity")}>
-              Dispute severity
+              Dispute priority
             </Button>
-            <Button type="text" icon={<ReloadOutlined />} loading={busy} onClick={onRetriage}>
-              Re-triage
-            </Button>
+            {onRetriage && (
+              <Tooltip title="Re-runs the triage graph. Not available on all backends.">
+                <Button type="text" icon={<ReloadOutlined />} loading={busy} onClick={onRetriage}>
+                  Re-triage
+                </Button>
+              </Tooltip>
+            )}
           </Flex>
         </>
       )}
 
       <Modal
         open={overrideField !== null}
-        title={overrideField === "severity" ? "Dispute the severity" : "Reassign to another team"}
+        title={overrideField === "severity" ? "Dispute the priority" : "Reassign to another team"}
         okText="Save override"
         onCancel={() => {
           setOverrideField(null);
@@ -420,12 +434,12 @@ export function DecisionBody({
         <Form form={form} layout="vertical" onFinish={submitOverride} requiredMark={false} preserve={false}>
           <Form.Item
             name="new_value"
-            label={<span className="label">{overrideField === "severity" ? "New severity" : "New team"}</span>}
+            label={<span className="label">{overrideField === "severity" ? "New priority" : "New team"}</span>}
             rules={[{ required: true, message: "Pick a value" }]}
           >
             <Select
               options={overrideField === "severity" ? SEVERITY_OPTIONS : TEAM_OPTIONS}
-              placeholder={overrideField === "severity" ? "Select a severity" : "Select a team"}
+              placeholder={overrideField === "severity" ? "Select a priority" : "Select a team"}
             />
           </Form.Item>
           <Form.Item
@@ -484,20 +498,28 @@ export default function DecisionDrawer({
   const accept = useMutation({
     mutationFn: () => api.approve(ticketId!),
     onSuccess: ({ data }) => {
+      const team = (data.assigned_team || "ops") as Team;
       toast.success(
-        `Routed to ${TEAM_LABEL[(data.assigned_team ?? "ops") as Team]} · SLA ${formatMinutes(data.sla_target_mins)}`
+        `Routed to ${TEAM_LABEL[team] ?? team} · SLA ${formatMinutes(data.sla_target_mins)}`
       );
       invalidate();
       onClose();
     },
-    onError: (error: Error) => toast.error(error.message),
+    onError: (error: Error) => {
+      if (error instanceof ApiError && error.status === 409) {
+        toast.error(error.message || "Ticket is not ready to approve (needs priority + team).");
+        return;
+      }
+      toast.error(error.message);
+    },
   });
 
   const override = useMutation({
     mutationFn: (input: OverrideInput) => api.override(ticketId!, input),
     onSuccess: ({ data }) => {
+      const team = (data.assigned_team || "ops") as Team;
       toast.success(
-        `Override saved — ${data.severity} · ${TEAM_LABEL[(data.assigned_team ?? "ops") as Team]}`
+        `Override saved — ${data.severity || "—"} · ${TEAM_LABEL[team] ?? team}`
       );
       invalidate();
     },
@@ -520,6 +542,9 @@ export default function DecisionDrawer({
   });
 
   const busy = accept.isPending || override.isPending || retriage.isPending;
+  // Live backend has no POST /tickets/:id/retriage — hide the control (api.retriage still
+  // soft-fails if something else wires it).
+  const canRetriage = false;
 
   const decisionPane = (
     <DecisionBody
@@ -533,35 +558,38 @@ export default function DecisionDrawer({
       onAccept={() => accept.mutate()}
       onApprove={() => accept.mutate()}
       onOverride={(input) => override.mutate(input)}
-      onRetriage={() => retriage.mutate()}
+      onRetriage={canRetriage ? () => retriage.mutate() : undefined}
     />
   );
 
   const timelinePane = useMemo(() => {
     if (timelineQuery.isPending) return <Skeleton active paragraph={{ rows: 6 }} />;
-    if (timelineQuery.error) {
-      return (
-        <Alert
-          type="error"
-          showIcon
-          message="Could not load the timeline"
-          description={(timelineQuery.error as Error).message}
-          action={
-            <Button size="small" onClick={() => timelineQuery.refetch()}>
-              Retry
-            </Button>
-          }
-        />
-      );
-    }
     const events = timelineQuery.data ?? [];
-    if (!events.length) {
-      return <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Nothing has happened to this ticket yet." />;
+    // Backend may not implement /timeline — empty is fine for demo.
+    if (timelineQuery.error || !events.length) {
+      const ticket = detailQuery.data?.ticket;
+      return (
+        <Flex vertical gap={12}>
+          {ticket && (
+            <Alert
+              type="info"
+              showIcon
+              message={`${ticket.external_id} · ${ticket.source}`}
+              description={
+                ticket.last_error
+                  ? `Last error: ${ticket.last_error}`
+                  : `Status ${ticket.status}. Full timeline API is not available — showing ticket fields only.`
+              }
+            />
+          )}
+          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No timeline events yet." />
+        </Flex>
+      );
     }
     return (
       <Timeline
         items={events.map((event) => ({
-          color: TIMELINE_COLOR[event.kind],
+          color: TIMELINE_COLOR[event.kind] ?? "gray",
           children: (
             <Flex vertical gap={4}>
               <Typography.Text strong style={{ fontSize: 13 }}>
@@ -593,7 +621,11 @@ export default function DecisionDrawer({
           <Typography.Text strong>{readOnly ? "Decision record" : "Decision"}</Typography.Text>
         </Flex>
       }
-      extra={ticket ? <Tag>{STATUS[ticket.status].label}</Tag> : null}
+      extra={
+        ticket ? (
+          <Tag>{STATUS[ticket.status as TicketStatus]?.label ?? ticket.status}</Tag>
+        ) : null
+      }
       styles={{ body: { paddingTop: 16 }, wrapper: { boxShadow: "var(--shadow-float)" } }}
     >
       {showTimeline ? (

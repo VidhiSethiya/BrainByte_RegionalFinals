@@ -19,10 +19,10 @@ import { useEffect, useState } from "react";
 import type { Severity, Team, TicketStatus } from "../api/client";
 
 export const SEVERITY = {
-  S1: { label: "S1 · Critical", color: "error", icon: <FireOutlined /> },
-  S2: { label: "S2 · High", color: "warning", icon: <WarningOutlined /> },
-  S3: { label: "S3 · Medium", color: "processing", icon: <InfoCircleOutlined /> },
-  S4: { label: "S4 · Low", color: "default", icon: <MinusCircleOutlined /> },
+  Highest: { label: "Highest", color: "error", icon: <FireOutlined /> },
+  High: { label: "High", color: "warning", icon: <WarningOutlined /> },
+  Medium: { label: "Medium", color: "processing", icon: <InfoCircleOutlined /> },
+  Low: { label: "Low", color: "default", icon: <MinusCircleOutlined /> },
 } as const;
 
 export const STATUS = {
@@ -79,8 +79,15 @@ export const ENVIRONMENT_OPTIONS: SelectOption[] = (
   Object.keys(ENVIRONMENT_LABEL) as (keyof typeof ENVIRONMENT_LABEL)[]
 ).map((value) => ({ value, label: ENVIRONMENT_LABEL[value] }));
 
-export default function SeverityTag({ severity }: { severity: Severity }) {
-  const { label, color, icon } = SEVERITY[severity];
+export default function SeverityTag({ severity }: { severity: Severity | "" | null | undefined }) {
+  if (!severity || !(severity in SEVERITY)) {
+    return (
+      <Tag style={{ marginInlineEnd: 0 }}>
+        Unset
+      </Tag>
+    );
+  }
+  const { label, color, icon } = SEVERITY[severity as Severity];
   return (
     <Tag color={color} icon={icon} style={{ marginInlineEnd: 0 }}>
       {label}
@@ -88,8 +95,8 @@ export default function SeverityTag({ severity }: { severity: Severity }) {
   );
 }
 
-export function StatusTag({ status }: { status: TicketStatus }) {
-  const entry = STATUS[status];
+export function StatusTag({ status }: { status: TicketStatus | string }) {
+  const entry = STATUS[status as TicketStatus] ?? { label: status || "Unknown", color: "default" };
   return (
     <Tag color={entry.color} style={{ marginInlineEnd: 0 }}>
       {entry.label}
@@ -97,30 +104,37 @@ export function StatusTag({ status }: { status: TicketStatus }) {
   );
 }
 
-export function TeamTag({ team }: { team: Team | null }) {
+export function TeamTag({ team }: { team: Team | "" | null | undefined }) {
   if (!team) return <Tag style={{ marginInlineEnd: 0 }}>Unassigned</Tag>;
-  return <Tag style={{ marginInlineEnd: 0 }}>{TEAM_LABEL[team]}</Tag>;
+  return <Tag style={{ marginInlineEnd: 0 }}>{TEAM_LABEL[team as Team] ?? team}</Tag>;
 }
 
 /**
  * Confidence: a bar alone is not an answer, so the number is always rendered too.
  * Below 0.70 the row is also telling the user it needs review.
  */
-export function ConfidenceMeter({ value, showBar = true }: { value: number; showBar?: boolean }) {
-  const band = value >= 0.85 ? "is-high" : value >= 0.7 ? "is-mid" : "is-low";
+export function ConfidenceMeter({
+  value,
+  showBar = true,
+}: {
+  value: number | null | undefined;
+  showBar?: boolean;
+}) {
+  const score = typeof value === "number" && !Number.isNaN(value) ? value : 0;
+  const band = score >= 0.85 ? "is-high" : score >= 0.7 ? "is-mid" : "is-low";
   const wording =
-    value >= 0.85 ? "High confidence" : value >= 0.7 ? "Moderate confidence" : "Low confidence — needs review";
+    score >= 0.85 ? "High confidence" : score >= 0.7 ? "Moderate confidence" : "Low confidence — needs review";
 
   return (
     <Tooltip title={wording}>
       <Flex align="center" gap={8}>
         {showBar && (
           <span className={`confidence-bar ${band}`} aria-hidden="true">
-            <span style={{ width: `${Math.round(value * 100)}%` }} />
+            <span style={{ width: `${Math.round(score * 100)}%` }} />
           </span>
         )}
         <span className="tabular" style={{ fontSize: 13 }}>
-          {(value * 100).toFixed(0)}%
+          {(score * 100).toFixed(0)}%
         </span>
       </Flex>
     </Tooltip>

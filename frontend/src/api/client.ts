@@ -150,32 +150,197 @@ export interface User {
 
 // --- triage domain ----------------------------------------------------------
 
-export type Severity = "S1" | "S2" | "S3" | "S4";
+export type Severity = "Highest" | "High" | "Medium" | "Low";
+
+const LEGACY_SEVERITY: Record<string, Severity> = {
+  S1: "Highest",
+  S2: "High",
+  S3: "Medium",
+  S4: "Low",
+};
+
+/** Map legacy S1–S4 (and case variants) onto Jira Priority names. */
+export function normalizeSeverity(value: string | null | undefined): Severity | "" {
+  if (!value) return "";
+  const raw = String(value).trim();
+  if (raw === "Highest" || raw === "High" || raw === "Medium" || raw === "Low") return raw;
+  const mapped = LEGACY_SEVERITY[raw.toUpperCase()];
+  if (mapped) return mapped;
+  const hit = (["Highest", "High", "Medium", "Low"] as Severity[]).find(
+    (name) => name.toLowerCase() === raw.toLowerCase()
+  );
+  return hit ?? "";
+}
 export type Team = "ops" | "azure" | "aws" | "gcp";
 export type TicketStatus =
   | "new" | "triaged" | "awaiting_approval" | "routed" | "synced" | "failed" | "resolved";
 
 export interface TicketRow {
   id: string;
-  external_id: string;              // "INC0012345"
+  external_id: string;              // "SCRUM-3" / "INC0012345"
   source: "jira" | "synthetic" | "manual";
   title: string;
+  body_masked?: string;
   application: string;
-  environment: "prod" | "uat" | "dev";
+  environment: "prod" | "uat" | "dev" | string;
   category: string;
-  severity: Severity;
+  subcategory?: string;
+  /** Empty string until triage finishes — treat as unset in the UI. */
+  severity: Severity | "";
   priority_score: number;           // 0–100
-  assigned_team: Team | null;
-  status: TicketStatus;
+  assigned_team: Team | "" | null;
+  status: TicketStatus | "approved" | string;
   confidence: number;               // 0–1
   needs_human: boolean;
-  sla_target_mins: number;
-  sla_due_at: string | null;        // ISO — drives the countdown
+  /** Optional — live Ticket.to_dict does not send SLA fields. */
+  sla_target_mins?: number;
+  sla_due_at?: string | null;
   overridden_by: string | null;
   override_reason: string | null;
+  last_error?: string | null;
+  sync_attempts?: number;
   created_at: string;
-  resolved_at: string | null;
-  resolution_minutes: number | null;
+  updated_at?: string | null;
+  resolved_at?: string | null;
+  resolution_minutes?: number | null;
+}
+
+export interface SyncResult {
+  pulled: number;
+  triaged: number;
+  failed: number;
+  error: string | null;
+}
+
+/** Raw GET /tickets/:id payload before UI adaptation. */
+interface TicketDetailRaw {
+  ticket: TicketRow;
+  runs?: Array<{
+    id: string;
+    ticket_id: string;
+    decision_json?: Partial<TriageDecision> | Record<string, unknown>;
+    model?: string;
+    tier?: string;
+    tokens?: number;
+    cost_usd?: number;
+    latency_ms?: number;
+    trace_id?: string;
+    guardrails_fired?: { type: string; detail?: string }[];
+    created_at?: string;
+  }>;
+  // Mock / richer shapes may already be flattened:
+  body_masked?: string;
+  decision?: TriageDecision | null;
+  guardrails_fired?: { type: string; detail?: string }[];
+  model?: string;
+  tier?: string;
+  latency_ms?: number;
+  total_tokens?: number;
+  cost_usd?: number;
+  trace_id?: string;
+}
+
+interface CreateTicketRaw {
+  ticket: TicketRow;
+  decision?: TriageDecision | null;
+  blocked?: boolean;
+  blocked_reason?: string;
+  guardrails_fired?: { type: string; detail?: string }[];
+}
+
+function decisionFromJson(
+  ticket: TicketRow,
+  raw: Partial<TriageDecision> | Record<string, unknown> | null | undefined
+): TriageDecision | null {
+  if (!raw || typeof raw !== "object") return null;
+  const severity =
+    normalizeSeverity(String(raw.severity ?? "")) ||
+    normalizeSeverity(ticket.severity) ||
+    undefined;
+  const team = (raw.assigned_team as Team | undefined) || (ticket.assigned_team as Team) || undefined;
+  if (!severity || !team) {
+    // Ticket may still carry fields when decision_json is thin.
+    if (!normalizeSeverity(ticket.severity) || !ticket.assigned_team) return null;
+  }
+  return {
+    ticket_id: String(raw.ticket_id ?? ticket.id),
+    category: String(raw.category ?? ticket.category ?? ""),
+    subcategory: String(raw.subcategory ?? ticket.subcategory ?? ""),
+    severity: (severity || normalizeSeverity(ticket.severity)) as Severity,
+    priority_score: Number(raw.priority_score ?? ticket.priority_score ?? 0),
+    assigned_team: (team || ticket.assigned_team) as Team,
+    sla_target_mins: Number(raw.sla_target_mins ?? ticket.sla_target_mins ?? 0),
+    confidence: Number(raw.confidence ?? ticket.confidence ?? 0),
+    rationale: String(raw.rationale ?? ""),
+    evidence: Array.isArray(raw.evidence) ? (raw.evidence as Citation[]) : [],
+    duplicate_of: (raw.duplicate_of as string | null | undefined) ?? null,
+    suggested_first_action: String(raw.suggested_first_action ?? ""),
+    needs_human: Boolean(raw.needs_human ?? ticket.needs_human),
+    escalation_reason: String(raw.escalation_reason ?? ""),
+  };
+}
+
+function decisionFromTicket(ticket: TicketRow): TriageDecision | null {
+  const severity = normalizeSeverity(ticket.severity);
+  if (!severity || !ticket.assigned_team) return null;
+  return {
+    ticket_id: ticket.id,
+    category: ticket.category || "",
+    subcategory: ticket.subcategory || "",
+    severity,
+    priority_score: ticket.priority_score ?? 0,
+    assigned_team: ticket.assigned_team as Team,
+    sla_target_mins: ticket.sla_target_mins ?? 0,
+    confidence: ticket.confidence ?? 0,
+    rationale: "",
+    evidence: [],
+    duplicate_of: null,
+    suggested_first_action: "",
+    needs_human: ticket.needs_human,
+    escalation_reason: "",
+  };
+}
+
+/** Adapt live `{ ticket, runs }` (or mock flat detail) into TicketDetail. */
+export function adaptTicketDetail(raw: TicketDetailRaw): TicketDetail {
+  const ticket = {
+    ...raw.ticket,
+    severity: normalizeSeverity(raw.ticket.severity) || raw.ticket.severity,
+  };
+  const run = raw.runs?.[0];
+  const decision =
+    raw.decision ??
+    decisionFromJson(ticket, run?.decision_json) ??
+    decisionFromTicket(ticket);
+  return {
+    ticket,
+    body_masked: raw.body_masked ?? ticket.body_masked ?? "",
+    decision,
+    guardrails_fired: raw.guardrails_fired ?? run?.guardrails_fired ?? [],
+    model: raw.model ?? run?.model ?? "",
+    tier: (raw.tier as TicketDetail["tier"]) ?? (run?.tier as TicketDetail["tier"]) ?? "standard",
+    latency_ms: raw.latency_ms ?? run?.latency_ms ?? 0,
+    total_tokens: raw.total_tokens ?? run?.tokens ?? 0,
+    cost_usd: raw.cost_usd ?? run?.cost_usd ?? 0,
+    trace_id: raw.trace_id ?? run?.trace_id ?? "",
+  };
+}
+
+/** Adapt POST /tickets create payload into TriageRunResult (empty graph nodes). */
+export function adaptCreateResult(raw: CreateTicketRaw): TriageRunResult {
+  const ticket = raw.ticket;
+  const decision =
+    raw.decision ??
+    (raw.blocked ? null : decisionFromTicket(ticket));
+  return {
+    ticket,
+    decision,
+    nodes: [],
+    retries: 0,
+    total_ms: 0,
+    total_tokens: 0,
+    cost_usd: 0,
+  };
 }
 
 export interface TriageDecision {
@@ -332,22 +497,68 @@ export const api = {
   // --- triage ---------------------------------------------------------------
 
   tickets: (params?: TicketListParams) => list<TicketRow>("/tickets", params),
-  ticket: (id: string) => get<TicketDetail>(`/tickets/${id}`),
-  ticketTimeline: (id: string) => get<TimelineEvent[]>(`/tickets/${id}/timeline`),
+  ticket: async (id: string) => {
+    const { data, meta } = await get<TicketDetailRaw>(`/tickets/${id}`);
+    return { data: adaptTicketDetail(data), meta };
+  },
+  ticketTimeline: async (id: string) => {
+    try {
+      return await get<TimelineEvent[]>(`/tickets/${id}/timeline`);
+    } catch (err) {
+      if (err instanceof ApiError && (err.status === 404 || err.code === "not_found")) {
+        return { data: [] as TimelineEvent[], meta: {} };
+      }
+      throw err;
+    }
+  },
 
-  createTicket: (body: {
+  createTicket: async (input: {
     title: string;
-    description: string;
+    /** Preferred — matches TicketIngestRequest.body */
+    body?: string;
+    /** @deprecated use body; kept so older form callers still compile */
+    description?: string;
     application?: string;
     environment?: string;
-  }) => post<TriageRunResult>("/tickets", body),
+  }) => {
+    const payload = {
+      title: input.title,
+      body: input.body ?? input.description ?? "",
+      application: input.application ?? "",
+      environment: input.environment ?? "prod",
+      source: "manual" as const,
+      channel: "ui",
+    };
+    const { data, meta } = await post<CreateTicketRaw | TriageRunResult>("/tickets", payload);
+    // Mock returns TriageRunResult already; live returns { ticket, decision, … }.
+    if (data && "nodes" in data && Array.isArray((data as TriageRunResult).nodes)) {
+      return { data: data as TriageRunResult, meta };
+    }
+    return { data: adaptCreateResult(data as CreateTicketRaw), meta };
+  },
 
   bulkTriage: (count: number) =>
     post<{ processed: number; total_ms: number; results: TriageRunResult[] }>("/tickets/bulk", {
       count,
     }),
 
-  retriage: (id: string) => post<TriageRunResult>(`/tickets/${id}/retriage`),
+  retriage: async (id: string) => {
+    try {
+      return await post<TriageRunResult>(`/tickets/${id}/retriage`);
+    } catch (err) {
+      if (
+        err instanceof ApiError &&
+        (err.status === 404 || err.status === 405 || err.code === "not_found" || err.code === "method_not_allowed")
+      ) {
+        throw new ApiError(
+          "not_implemented",
+          "Re-triage is not available on this backend yet. Use Sync Now or submit a new ticket.",
+          501
+        );
+      }
+      throw err;
+    }
+  },
 
   override: (id: string, body: { field: string; new_value: string; reason: string }) =>
     patch<TicketRow>(`/tickets/${id}/override`, body),
@@ -364,7 +575,19 @@ export const api = {
     return request<{ text: string }>("/voice/transcribe", { method: "POST", body });
   },
 
-  syncNow: () => post<{ pulled: number; pushed: number; failed: number }>("/integrations/sync"),
+  syncNow: async () => {
+    const { data, meta } = await post<SyncResult>("/integrations/sync");
+    return {
+      data: {
+        pulled: data?.pulled ?? 0,
+        triaged: data?.triaged ?? 0,
+        failed: data?.failed ?? 0,
+        error: data?.error ?? null,
+        watermark: meta?.watermark ?? null,
+      },
+      meta,
+    };
+  },
 
   audit: (params?: ListParams) => list<any>("/audit", params),
   verifyAudit: () => get<{ valid: boolean; entries: number; broken_at: number | null }>("/audit/verify"),
