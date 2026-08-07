@@ -63,7 +63,7 @@ from rag.schemas import (
     LoginRequest,
     OverrideRequest,
     TicketIngestRequest,
-    normalize_severity,
+    to_priority,
 )
 
 api_bp = Blueprint("api", __name__)
@@ -538,13 +538,14 @@ def _scope_ticket_query(query, user: dict):
 def _normalize_ticket_filters(params):
     """Normalise `filter[severity]` to the canonical P1–P4 band.
 
-    The column stores Jira's Priority names. `normalize_severity()` also accepts
-    the retired S1–S4 codes and case variants, so a bookmarked URL or an older
-    client still resolves instead of silently returning an empty list — which is
-    exactly what happened when the two layers disagreed about the vocabulary."""
+    The column stores P1–P4 (docs/PRIORITY_RULEBOOK.md). `to_priority()` also
+    accepts the retired S1–S4 codes and Jira's Highest/High/Medium/Low, so a
+    bookmarked URL or an older client still resolves instead of silently
+    returning an empty list — which is exactly what happened when the frontend
+    moved to a new vocabulary and nothing translated at the boundary."""
     raw = params.filters.get("severity")
     if raw:
-        params.filters["severity"] = normalize_severity(raw) or raw
+        params.filters["severity"] = to_priority(raw) or raw
     return params
 
 
@@ -639,6 +640,14 @@ def override_ticket(ticket_id: str):
         if _scope_ticket_query(s.query(Ticket).filter_by(id=ticket_id), g.user).first() is None:
             return fail("not_found", "Ticket not found", 404)
 
+<<<<<<< HEAD
+        # Normalise the band on the way in. The column stores P1–P4; a client
+        # sending a retired S-code or a Jira Priority name still lands correctly
+        # instead of writing a string nothing downstream can match.
+        new_value = payload.new_value
+        if payload.field == "severity":
+            new_value = to_priority(str(new_value)) or new_value
+=======
         new_value = payload.new_value
         if payload.field == "severity":
             from integrations.jira import normalize_priority
@@ -650,6 +659,7 @@ def override_ticket(ticket_id: str):
                     "Priority must be Highest, High, Medium, or Low",
                     422,
                 )
+>>>>>>> origin/main
 
         setattr(row, payload.field, new_value)
         row.overridden_by = g.user["id"]
