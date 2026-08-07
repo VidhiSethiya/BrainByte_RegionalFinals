@@ -398,3 +398,93 @@ polling is the shipped path and the webhook receiver is demonstrated with a loca
 classification accuracy, routing precision, and the share of tickets that reached a team
 without human touch. State the baseline assumption explicitly; a benefit number without a
 stated baseline is not a number.]
+
+Looking at the plans, here's how TicketSphere is multi-agentic (and an honest clarification):
+
+## The 10-Node Triage Graph (llm.md, Phase 1)
+
+Each "agent" is a **specialist node** in a single LangGraph orchestration:
+
+```
+normalize → enrich → grade → classify → assess → route → reflect → verify → gate → sync
+```
+
+Each node has **one job, one validated output shape**:
+
+| Node | Role | Input | Output |
+|---|---|---|---|
+| **normalize** | Extract & mask PII | Raw ticket text | Masked text + category + app |
+| **enrich** | Retrieve context | Query + user + summary | Top 6 chunks via Shashank's retrieve() |
+| **grade** | CRAG grading | Chunks | Keep or re-retrieve once (corrective loop) |
+| **classify** | Category inference | Chunks + question | TriageVerdict (enum-constrained, no hallucination) |
+| **assess** | Severity via deep model | Chunks + context | SeverityVerdict (S1–S4, SLA match) |
+| **route** | Team assignment | Severity + service | RoutingVerdict (team + capacity check) |
+| **reflect** | Self-critique | Decision + evidence | Lower confidence if evidence gaps exist |
+| **verify** | Output guard | Answer | Block if hallucinated or policy fires |
+| **gate** | Human escalation | Confidence + severity | Flag for approval if S1 or <0.70 confidence |
+| **sync** | Jira write-back | Approved decision | Update ticket in Jira + audit entry |
+
+---
+
+## Why this is "multi-agent"
+
+1. **Each node is autonomous within its scope** — it makes a decision (classify → S2, route → AWS) and passes it downstream
+2. **Tool use** — nodes call Shashank's retriever, tools like `ticket_stats` (SQL), `team_capacity`, `sla_policy`, and `ticket_update` (Jira)
+3. **Self-critique** — the **reflect** node grades the earlier decisions against cited evidence; it can only lower confidence, never raise it
+4. **Error recovery** — the **grade** node triggers a retry on low-relevance retrieval (the CRAG loop)
+5. **Escalation logic** — the **gate** node routes to a human instead of auto-deciding on uncertain cases
+6. **Tool scoping** — tools are access-controlled: `ticket_update` refuses to write unless the decision is approved (checking tool.requires_role and ticket.status)
+
+---
+
+## Honest clarification: single workflow, not true multi-agent
+
+This is **NOT** a multi-agent system in the strict sense (concurrent agents with emergent behaviour, voting, debate). It's a **single orchestrated workflow with specialist nodes**. 
+
+**Why?** Time budget. True multi-agent systems (proposal → debate → consensus → reflect → retry) are expensive and suited to high-stakes decisions. Ticket triage is time-sensitive (10s SLA) and has a human gate anyway, so a linear sequential pipeline with built-in critique is more efficient.
+
+---
+
+## How we justify this to judges
+
+
+> **Q: Is this really "agentic", or is it a RAG pipeline with extra steps?**
+>
+> Ten nodes, each with one job and one validated output shape: normalise → enrich → grade → classify → assess → route → reflect → verify → gate → sync. It **plans** (route selection), **acts** (retrieval, tools), **verifies** its own output, and **retries** on failure. 
+> 
+> It does not yet take external actions — no writes to other systems. [BLUEPRINT actually adds Jira sync]
+>
+> **Q: What stops the agent doing something it shouldn't with those tools?**
+>
+> The registry declares scope per tool: `requires_role` and `writes`. `tools.call()` refuses any write tool unless the decision is in state `approved`, or auto-approval applies (confidence ≥ 0.85 **and** severity S3/S4). A refusal writes `tool.denied` to the audit log.
+
+---
+
+## The multi-agent story for the demo
+
+**Beat 2 of the 3-minute demo** (from BLUEPRINT.md § 13):
+
+> Paste a real-looking RDS failover ticket. Watch the seven nodes execute with tier, latency and tokens. Decision card cites two precedent tickets — click one, land on that ticket in history with its resolution. **Multi-agent coordination, grounded in *our own* past tickets and verifiable in one click.**
+
+The demo shows:
+- Each node lighting up in sequence (visual proof of the pipeline)
+- The retry edge if `grade` fails (visible evidence of the CRAG corrective loop)
+- The decision is grounded in evidence (not hallucinated)
+- Everything is audited (tool calls, approvals, tool denials)
+
+---
+
+## What is a triage ?
+
+**Answer:** 
+
+AI triage is the use of artificial intelligence to prioritize, classify, and route tasks, patients, or issues based on urgency, severity, or context.
+Definition and Purpose
+In general, triage refers to the process of prioritizing items or cases according to urgency or importance. In AI, this concept is applied to automate and enhance decision-making in areas such as healthcare, IT support, and customer service. AI triage systems analyze large datasets to identify patterns, predict outcomes, and assign priority levels, improving efficiency and reducing human error
+Time-constrained triage (10-second SLA) + human gate (manager approves before Jira write) = a linear pipeline is more deterministic and faster than debate-based consensus. A single orchestrated workflow with built-in critique (`reflect` node) and recovery (`grade` retry) is the right tradeoff.
+
+**But we ARE showing agent patterns:**
+- ReAct loop: plan (route selection) → act (retrieve) → think (grade) → reflect (self-critique) → verify
+- Tool use with scope enforcement
+- Self-correction (retry on low relevance)
+- Graceful degradation (no deep model? fall back to keyword routing → human)
