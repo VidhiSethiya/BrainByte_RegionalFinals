@@ -774,7 +774,9 @@ def _precedent_agreement(state: TriageState) -> float | None:
 
 
 def _confidence_gates(state: TriageState) -> dict[str, float]:
-    """Named gates for the composite. Omitted keys are skipped by min()."""
+    """Named gates for the composite. precedent_agreement is omitted (not
+    scored as zero) when no ticket_history was retrieved — see
+    _score_confidence for how these get combined."""
     gates: dict[str, float] = {
         "evidence_coverage": _evidence_coverage(state),
         "band_margin": _band_margin(state),
@@ -786,15 +788,49 @@ def _confidence_gates(state: TriageState) -> dict[str, float]:
 
 
 def _score_confidence(state: TriageState) -> tuple[float, dict[str, float], str]:
-    """Confidence = weakest gate that applies (PRIORITY_RULEBOOK.md §8.3).
+    """Confidence = mean(evidence_coverage, precedent_agreement) — averaged
+    rather than min'd, per team decision — then floored by band_margin via
+    min(). band_margin stays a hard floor rather than joining the average
+    because it measures something categorically different (how close the
+    priority score sits to a 25/50/75 cut-point, i.e. decision clarity) from
+    the other two (how much relevant evidence was actually found). Averaging
+    it in would let a mid-band score compensate for a coin-flip band margin,
+    which isn't the failure mode this gate exists to catch.
 
-    Returns (confidence, gates, limiting_gate_name).
+    Trade-off vs. the old all-three min(): a ticket with very little
+    retrieved evidence but one coincidentally-matching precedent chunk can
+    now score meaningfully higher than either signal alone — evidence_coverage
+    and precedent_agreement are no longer independently required, they're
+    compensatory. See the confidence-formula discussion in chat before
+    changing this again.
+
+    Returns (confidence, gates, limiting_gate_name). `gates` still carries the
+    raw evidence_coverage/band_margin/precedent_agreement values (existing
+    callers key off those names directly), plus the new
+    "evidence_precedent_combined" value.
     """
     gates = _confidence_gates(state)
     if not gates:
         return 0.0, {}, "none"
-    limiting = min(gates, key=gates.get)
-    return round(gates[limiting], 3), gates, limiting
+
+    evidence = gates.get("evidence_coverage", 0.0)
+    precedent = gates.get("precedent_agreement")
+    band = gates.get("band_margin", 1.0)
+
+    combined = round((evidence + precedent) / 2, 3) if precedent is not None else round(evidence, 3)
+    gates = dict(gates)
+    gates["evidence_precedent_combined"] = combined
+
+    if combined <= band:
+        confidence = combined
+        if precedent is None:
+            limiting = "evidence_coverage"
+        else:
+            limiting = "evidence_coverage" if evidence <= precedent else "precedent_agreement"
+    else:
+        confidence, limiting = band, "band_margin"
+
+    return round(confidence, 3), gates, limiting
 
 
 def _combined_confidence(state: TriageState) -> float:

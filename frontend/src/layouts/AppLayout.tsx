@@ -9,7 +9,6 @@
 import {
   ApartmentOutlined,
   DashboardOutlined,
-  ExperimentOutlined,
   FileTextOutlined,
   HistoryOutlined,
   LogoutOutlined,
@@ -40,7 +39,6 @@ const NAV: NavItem[] = [
   { key: "/history", icon: <HistoryOutlined />, label: "History" },
   { key: "/control", icon: <ApartmentOutlined />, label: "Control Tower", managerOnly: true },
   { key: "/documents", icon: <FileTextOutlined />, label: "Knowledge Base", managerOnly: true },
-  { key: "/evals", icon: <ExperimentOutlined />, label: "Evaluations", managerOnly: true },
   { key: "/dashboard", icon: <DashboardOutlined />, label: "Usage", managerOnly: true },
 ];
 
