@@ -77,50 +77,12 @@ visit our product to benefit from it.
 the incident.** This is the real differentiator. A pure ITSM tool models an
 incident and its resolution. Jira additionally models **story points, sprints,
 epics, and a team picker** natively — verified on our own board (`SCRUM`,
-team-managed Software project). That matters because application maintenance is
-not only "fix the outage": it is capacity planning. A triage system that knows a
-ticket is a **High** *and* that the AWS team already has 34 story points
-committed this sprint is making a materially better routing decision than one
-that only knows severity. Jira gives us both signals through one API.
-
-**3. It is the harder integration, so it proves the pattern.** Jira Cloud's REST
-v3 forces you to deal with **ADF** (Atlassian Document Format) rather than plain
-text, per-site custom field IDs, per-project workflow transition names, GDPR-
-redacted user objects, and 429 rate limiting. Building against that means the
-adapter is a real enterprise integration, not a `POST /tickets` toy.
-
-**4. It does not lock us in.** Every ticketing system is reached through one
-narrow interface — `backend/integrations/ticket_source.py::TicketSource`, with
-four methods: `fetch_since`, `update`, `add_comment`, `transition`. Jira is one
-implementation of it. A synthetic offline source is a second. **ServiceNow would
-be a third file**, roughly the same size as `jira.py`, with no change anywhere
-else in the codebase — the graph, the guardrails, the database and the UI never
-learn which ticketing system they are talking to. If a client runs ServiceNow for
-incidents and Jira for engineering work, both adapters can run side by side; the
-`tickets` table already keys on `(source, external_id)` precisely so two sources
-never collide.
-
-> **The honest limitation.** Story points and sprint capacity are *available* on
-> our board and are the reason Jira was chosen, but the routing node does not
-> consume them yet — see [§15](#15-what-is-real-what-is-stubbed).
+team-managed Software project). 
 
 ---
 
 ## 3. Act 0 — What exists before anyone logs in
 
-Two things are already in place when the demo starts. Both are set up once,
-before the audience is watching.
-
-### The knowledge base is indexed
-
-Run once from the repo root:
-
-```bash
-python db/vectordb/seed_vector_db.py --reset
-```
-
-This loads the organisation's institutional knowledge into the vector store
-(`db/vectordb/data/chroma`, Chroma collection `knowledge_base`):
 
 | Corpus | `doc_type` | What it is |
 |---|---|---|
@@ -130,7 +92,7 @@ This loads the organisation's institutional knowledge into the vector store
 | SLA policy | `sla_policy` | Priority → response/resolution minutes |
 | Escalation matrix | `escalation_matrix` | When a human must be involved (restricted sensitivity) |
 
-Every document is chunked (900 characters, 150 overlap), embedded, and stored
+Every document is chunked , embedded, and stored
 with governance metadata — `allowed_roles`, `sensitivity`, `team`, `doc_type` —
 so access control can be applied *inside* the search query rather than filtered
 afterwards.
@@ -852,17 +814,3 @@ shows the real path rather than a debug dump:
 | What retrieval returns for a ticket | The `enrich`/`grade` trace on `/triage`, or `POST /api/search` |
 | Which chunks produced a decision | The citation chips in the decision drawer |
 
-### Resetting
-
-Delete `db/sqlite/data/` and `db/vectordb/data/` and everything goes — users,
-tickets, triage runs, chat history, audit trail, uploads, vectors. Then re-run
-`python db/vectordb/seed_vector_db.py --reset`; the six demo users are recreated
-automatically on boot.
-
-Dropping just one is also useful: delete `db/sqlite/data/` to clear the queue and
-audit trail while keeping the indexed corpus, or `db/vectordb/data/chroma/` to
-re-index without losing users or ticket history.
-
-`db/sqlite/models.py::_migrate_sqlite_columns()` runs on every boot and adds any
-missing column additively, so an in-progress demo database never needs a manual
-wipe just because the schema grew.
