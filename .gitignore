@@ -1,22 +1,20 @@
 # Python
 __pycache__/
 *.py[cod]
-.venv/
-venv/
 
-# Env & secrets
-.env
-!.env.example
+# Env & secrets — intentionally tracked for this hackathon demo (backend/.env
+# is committed with live keys so judges/teammates can run it as-is). Revert
+# this after the event.
 
-# Generated state — delete db/sqlite/data and db/vectordb/data to reset everything
-# *.db-wal/*.db-shm: SQLite WAL mode (db/sqlite/models.py) writes these alongside
-# app.db and they churn on every request — never worth tracking.
-db/sqlite/data/*.db
+# Generated state — db/sqlite/data/app.db and db/vectordb/data/chroma are
+# tracked on purpose (pushed with the repo). WAL/SHM are pure churn on every
+# request and never worth tracking; one-off debugging backup folders
+# (chroma_*_backup_*, chroma_pre_*) are local scratch, not the real DB.
 db/sqlite/data/*.db-wal
 db/sqlite/data/*.db-shm
-db/vectordb/data/chroma/
-db/vectordb/data/uploads/
-*.sqlite3
+db/vectordb/data/chroma_broken_backup_*/
+db/vectordb/data/chroma_corrupt_backup_*/
+db/vectordb/data/chroma_pre_*/
 
 # Node
 node_modules/
