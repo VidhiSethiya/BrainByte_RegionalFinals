@@ -390,10 +390,14 @@ they are precisely the identifiers hybrid retrieval depends on.
 
 **Q: Is this fair across teams? Could it dump work on one queue?**
 That is the specific bias risk in a routing system, and we measure it rather than assert
-it: per-team precision and recall are reported, alongside severity distribution across
-customer tiers to check the model is not systematically down-severitying anyone.
-[PLACEHOLDER: report the measured per-team precision spread — including the gap if there
-is one.] A measured gap is a better answer than a claim of no bias.
+it: `observability/evals.py::score_triage_accuracy()` reports standard per-team
+precision/recall for routing, plus per-team under/over-severitization rates, surfaced on
+Evaluations as one table. (Note: the corpus has no "customer tier" concept at all — no
+such field exists anywhere in the schema — so team is the real grouping used instead of
+the customer-tier framing an earlier draft of this doc claimed; that version described
+a metric that did not exist yet.) [PLACEHOLDER: report the measured per-team precision
+spread once the held-out set is seeded — including the gap if there is one.] A measured
+gap is a better answer than a claim of no bias.
 
 **Q: How does this integrate with a real ticketing system?**
 Through a `TicketSource` adapter — Jira Cloud REST v3 in the demo, synthetic for offline.

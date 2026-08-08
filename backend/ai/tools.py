@@ -449,6 +449,14 @@ def triage_analytics(user: dict | None = None) -> dict:
         "classification_accuracy": accuracy["classification_accuracy"] or 0.0,
         "routing_precision": accuracy["routing_precision"] or 0.0,
         "severity_mae": accuracy["severity_mae"] or 0.0,
+        # Fairness signals (observability/evals.py::score_triage_accuracy) — a
+        # single averaged routing_precision above cannot show that one team's
+        # tickets get routed correctly far less often than another's, or that
+        # one team's severity is systematically under/over-called relative to
+        # gold. Both are per-team breakdowns of numbers already computed above,
+        # not a new eval pass.
+        "per_team_routing": accuracy.get("per_team_routing", []),
+        "per_team_severity_bias": accuracy.get("per_team_severity_bias", []),
         # Denominator is tickets that have actually been decided (status != "new"),
         # not every row — a ticket that was never triaged can't have been overridden,
         # so counting it against the rate would understate how often a real decision

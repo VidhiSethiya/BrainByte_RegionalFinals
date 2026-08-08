@@ -472,6 +472,18 @@ export interface TriageAnalytics {
   tokens_today?: number;
   /** Predicted vs. labelled severity, for the confusion matrix on Evaluations. */
   severity_confusion?: { predicted: Severity; actual: Severity; count: number }[];
+  /**
+   * Fairness breakdown — is routing/severity systematically worse for one team
+   * than another? Empty until held-out gold-labeled tickets exist (see
+   * observability/evals.py::score_triage_accuracy's "note" field).
+   */
+  per_team_routing?: { team: Team; precision: number | null; recall: number | null; cases: number }[];
+  per_team_severity_bias?: {
+    team: Team;
+    cases: number;
+    under_severitized_rate: number | null;
+    over_severitized_rate: number | null;
+  }[];
   recent_overrides?: {
     ticket_id: string;
     external_id: string;

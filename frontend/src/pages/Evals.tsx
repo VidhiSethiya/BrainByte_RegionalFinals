@@ -23,7 +23,8 @@ import {
   Tooltip,
   Typography,
 } from "antd";
-import { api, type ListParams, type Severity } from "../api/client";
+import { api, type ListParams, type Severity, type Team } from "../api/client";
+import { TEAM_LABEL } from "../components/SeverityTag";
 import StatTile from "../components/StatTile";
 import { FETCH_ALL_PAGE_SIZE, uiPagination } from "../components/uiPagination";
 
@@ -158,6 +159,20 @@ export default function Evals() {
 
   const triage = analytics.data;
 
+  // Two separate per-team arrays from the backend (routing + severity bias),
+  // joined into one row per team for a single table instead of two.
+  const fairnessRows = (triage?.per_team_routing ?? []).map((routing) => {
+    const bias = triage?.per_team_severity_bias?.find((b) => b.team === routing.team);
+    return {
+      team: routing.team,
+      precision: routing.precision,
+      recall: routing.recall,
+      cases: routing.cases,
+      under_severitized_rate: bias?.under_severitized_rate ?? null,
+      over_severitized_rate: bias?.over_severitized_rate ?? null,
+    };
+  });
+
   return (
     <Flex vertical gap={24}>
       <Flex align="flex-end" justify="space-between" gap={16} wrap>
@@ -258,6 +273,83 @@ export default function Evals() {
           </Card>
         </Col>
       </Row>
+
+      <Card
+        size="small"
+        title="Fairness — routing &amp; severity by team"
+        extra={
+          <Tooltip title="Overall routing precision above is one number averaged across every ticket — it can't show that one team's tickets get routed correctly far less often than another's, or that one team's severity is systematically under- or over-called. This breaks both down per team, on the same held-out gold labels.">
+            <Typography.Text type="secondary" style={{ fontSize: 12, cursor: "help" }}>
+              what is this?
+            </Typography.Text>
+          </Tooltip>
+        }
+      >
+        {analytics.isPending ? (
+          <Skeleton active paragraph={{ rows: 4 }} />
+        ) : fairnessRows.length ? (
+          <Table
+            rowKey="team"
+            size="small"
+            pagination={false}
+            dataSource={fairnessRows}
+            scroll={{ x: true }}
+            columns={[
+              {
+                title: "Team",
+                dataIndex: "team",
+                render: (team: Team) => TEAM_LABEL[team] ?? team,
+              },
+              {
+                title: "Routing precision",
+                dataIndex: "precision",
+                align: "right",
+                render: (v: number | null) =>
+                  v === null ? <Typography.Text type="secondary">—</Typography.Text> : `${(v * 100).toFixed(0)}%`,
+              },
+              {
+                title: "Routing recall",
+                dataIndex: "recall",
+                align: "right",
+                render: (v: number | null) =>
+                  v === null ? <Typography.Text type="secondary">—</Typography.Text> : `${(v * 100).toFixed(0)}%`,
+              },
+              {
+                title: "Cases",
+                dataIndex: "cases",
+                align: "right",
+              },
+              {
+                title: "Under-severitized",
+                dataIndex: "under_severitized_rate",
+                align: "right",
+                render: (v: number | null) =>
+                  v === null ? (
+                    <Typography.Text type="secondary">—</Typography.Text>
+                  ) : (
+                    <span style={{ color: v > 0.15 ? "var(--warning)" : undefined }}>{(v * 100).toFixed(0)}%</span>
+                  ),
+              },
+              {
+                title: "Over-severitized",
+                dataIndex: "over_severitized_rate",
+                align: "right",
+                render: (v: number | null) =>
+                  v === null ? (
+                    <Typography.Text type="secondary">—</Typography.Text>
+                  ) : (
+                    <span style={{ color: v > 0.15 ? "var(--warning)" : undefined }}>{(v * 100).toFixed(0)}%</span>
+                  ),
+              },
+            ]}
+          />
+        ) : (
+          <Empty
+            image={Empty.PRESENTED_IMAGE_SIMPLE}
+            description="No held-out gold-labeled tickets yet — run db/vectordb/seed_vector_db.py --generate to create the labelled set this needs."
+          />
+        )}
+      </Card>
 
       <Card size="small" title="Hybrid against pure vector, same questions">
         {summary.isPending ? (

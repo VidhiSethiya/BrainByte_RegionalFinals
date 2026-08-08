@@ -308,6 +308,8 @@ def score_triage_accuracy(
             "routing_precision": None,
             "severity_mae": None,
             "confusion_matrix": [],
+            "per_team_routing": [],
+            "per_team_severity_bias": [],
             "note": (
                 "No held-out gold-labeled tickets found. Run "
                 "`python db/vectordb/seed_vector_db.py --generate` to create "
@@ -341,13 +343,45 @@ def score_triage_accuracy(
     team_correct = 0
     severity_errors: list[int] = []
     confusion: dict[tuple[str, str], int] = {}
+    # Fairness signal #1: is routing systematically worse for one team than
+    # another? routing_precision above is a single accuracy number averaged
+    # over every ticket — it cannot show that, say, GCP tickets get routed
+    # correctly 95% of the time while AWS tickets get routed correctly 60% of
+    # the time. Standard per-class precision/recall, keyed on the gold team.
+    team_tp: dict[str, int] = {}
+    team_fp: dict[str, int] = {}
+    team_fn: dict[str, int] = {}
+    # Fairness signal #2: is severity assignment biased for/against one team?
+    # The problem statement's original framing was "severity distribution
+    # across customer tiers" — this system has no customer-tier concept
+    # anywhere in its schema (no such column, no such data), so fabricating
+    # one just to fill that claim would be a fake metric. Team is the
+    # equivalent real grouping this system actually has: does the model
+    # under-severitize (mark less urgent than gold) or over-severitize any
+    # one team's tickets more than others, which is the same "is someone
+    # getting systematically shortchanged" question the customer-tier framing
+    # was asking, on data that's real.
+    team_down: dict[str, int] = {}
+    team_up: dict[str, int] = {}
+    team_sev_cases: dict[str, int] = {}
+
+    from rag.schemas import normalize_severity
 
     for row in rows:
         if row.category and row.category == row.true_category:
             category_correct += 1
-        if row.assigned_team and row.assigned_team == row.true_team:
+
+        pred_team = row.assigned_team or ""
+        gold_team = row.true_team or ""
+        if pred_team and pred_team == gold_team:
             team_correct += 1
-        from rag.schemas import normalize_severity
+        if gold_team:
+            if pred_team == gold_team:
+                team_tp[gold_team] = team_tp.get(gold_team, 0) + 1
+            else:
+                team_fn[gold_team] = team_fn.get(gold_team, 0) + 1
+        if pred_team and pred_team != gold_team:
+            team_fp[pred_team] = team_fp.get(pred_team, 0) + 1
 
         pred_sev = normalize_severity(row.severity) or (row.severity or "?")
         gold_sev = normalize_severity(row.true_severity) or (row.true_severity or "?")
@@ -355,6 +389,40 @@ def score_triage_accuracy(
         confusion[key] = confusion.get(key, 0) + 1
         if pred_sev in SEVERITY_ORDER and gold_sev in SEVERITY_ORDER:
             severity_errors.append(abs(SEVERITY_ORDER[pred_sev] - SEVERITY_ORDER[gold_sev]))
+            if gold_team:
+                team_sev_cases[gold_team] = team_sev_cases.get(gold_team, 0) + 1
+                # Higher SEVERITY_ORDER rank == less severe (Highest=1 .. Low=4).
+                if SEVERITY_ORDER[pred_sev] > SEVERITY_ORDER[gold_sev]:
+                    team_down[gold_team] = team_down.get(gold_team, 0) + 1
+                elif SEVERITY_ORDER[pred_sev] < SEVERITY_ORDER[gold_sev]:
+                    team_up[gold_team] = team_up.get(gold_team, 0) + 1
+
+    teams = sorted(set(team_tp) | set(team_fp) | set(team_fn))
+    per_team_routing = []
+    for team in teams:
+        tp, fp, fn = team_tp.get(team, 0), team_fp.get(team, 0), team_fn.get(team, 0)
+        per_team_routing.append(
+            {
+                "team": team,
+                "precision": round(tp / (tp + fp), 3) if (tp + fp) else None,
+                "recall": round(tp / (tp + fn), 3) if (tp + fn) else None,
+                "cases": tp + fn,
+            }
+        )
+
+    per_team_severity_bias = [
+        {
+            "team": team,
+            "cases": team_sev_cases.get(team, 0),
+            "under_severitized_rate": round(team_down.get(team, 0) / team_sev_cases[team], 3)
+            if team_sev_cases.get(team)
+            else None,
+            "over_severitized_rate": round(team_up.get(team, 0) / team_sev_cases[team], 3)
+            if team_sev_cases.get(team)
+            else None,
+        }
+        for team in sorted(team_sev_cases)
+    ]
 
     n = len(rows)
     return {
@@ -369,4 +437,6 @@ def score_triage_accuracy(
             {"actual": gold, "predicted": pred, "count": count}
             for (gold, pred), count in sorted(confusion.items())
         ],
+        "per_team_routing": per_team_routing,
+        "per_team_severity_bias": per_team_severity_bias,
     }

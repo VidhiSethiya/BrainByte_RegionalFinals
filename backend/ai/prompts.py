@@ -416,6 +416,44 @@ Teams: ops, azure, aws, gcp.
 Return JSON only, matching this schema exactly (RoutingVerdict in rag/schemas.py):
 {{"assigned_team": "ops|azure|aws|gcp", "confidence": 0.0-1.0, "rationale": "<one plain-English sentence for an on-call engineer; cite [C#] for the catalogue entry used; avoid jargon>"}}"""
 
+# --- suggested first action ---------------------------------------------------
+# Deliberately NOT given retrieved context (no runbook excerpt, no precedent
+# ticket) — this is the model's own recommendation from the ticket's own
+# details and its general engineering knowledge, not a citation of a prior
+# incident or a copied runbook line. Build-day decision: ai/agents.py::
+# _suggest_first_action used to excerpt a matching runbook verbatim
+# specifically so it never needed its own groundedness check; this prompt
+# trades that guarantee away on purpose, so keep the ask narrow (one step,
+# no fabricated specifics) rather than inviting an invented root cause.
+SUGGEST_FIRST_ACTION_PROMPT = (
+    UNTRUSTED_DATA_NOTICE
+    + """
+
+Suggest the single most useful first troubleshooting step an on-call engineer
+should take for this incident, using only the ticket details below and your
+own general IT operations knowledge — no other source is provided for this
+answer.
+
+<<<TICKET_DATA>>>
+{ticket_text}
+<<<END_TICKET_DATA>>>
+
+APPLICATION: {application}
+CATEGORY: {category} / {subcategory}
+SEVERITY: {severity}
+
+Rules:
+- One concrete, actionable step — not a checklist, not "investigate the logs."
+- Do not invent specifics that are not in the ticket (no made-up error codes,
+  file paths, or metrics not mentioned above).
+- Plain English, one to two sentences, for an on-call engineer under time
+  pressure.
+- Do not cite or reference any other ticket, runbook, or prior incident — this
+  is your own recommendation, not a lookup.
+
+Return plain text only — no JSON, no markdown, no preamble."""
+)
+
 # --- reflect -----------------------------------------------------------------
 # Self-critique against the cited evidence, not against its own prior reasoning.
 # May only lower confidence, never raise it — enforced in ai/agents.py, not just

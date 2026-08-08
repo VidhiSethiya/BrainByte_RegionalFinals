@@ -38,8 +38,10 @@ interface Turn {
  * The knowledge-base assistant, available from every page.
  *
  * Deliberately single-session: the server pins one thread per user, so this widget
- * never sends or tracks a session_id and its context carries across the whole demo.
- * The Assistant page is the multi-session surface; this is the always-there one.
+ * never sends or tracks a session_id. That thread is scoped to one browser
+ * session, though — see the mount effect below — not carried across a page
+ * reload or a fresh login, unlike the Assistant page's saved multi-session
+ * threads.
  */
 export default function ChatbotDrawer() {
   const { message: toast } = App.useApp();
@@ -59,23 +61,16 @@ export default function ChatbotDrawer() {
   });
   const isAdmin = me?.role === "admin";
 
-  // Replay the pinned thread on first open so a page reload does not lose it.
+  // AppLayout (this component's only mount point) is remounted by a hard page
+  // refresh and by every fresh login, but never by client-side navigation
+  // between pages — so this fires exactly once per browser session, clearing
+  // whatever the backend's pinned thread (chatbot/session_manager.py::
+  // pinned_session) accumulated last time. Without this, that thread — and
+  // its rolling memory summary — would otherwise persist forever across
+  // reloads and logins, which is no longer the intended behavior.
   useEffect(() => {
-    if (!open || turns.length) return;
-    api
-      .chatbotHistory()
-      .then(({ data }) =>
-        setTurns(
-          data.map((m: any) => ({
-            role: m.role,
-            content: m.content,
-            citations: m.citations,
-            blocked: !!m.blocked_reason,
-          }))
-        )
-      )
-      .catch(() => undefined);
-  }, [open, turns.length]);
+    api.resetChatbot().catch(() => undefined);
+  }, []);
 
   async function send() {
     const question = draft.trim();

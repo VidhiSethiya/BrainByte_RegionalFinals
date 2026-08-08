@@ -7,6 +7,7 @@ Priority when the budget is tight:
 from __future__ import annotations
 
 import re
+from datetime import datetime, timedelta, timezone
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
@@ -35,6 +36,19 @@ Additional rules for live conversation:
   from CONVERSATION HISTORY / SUMMARY only. Quote briefly if helpful.
 - When TICKET DATA is provided, treat it as authoritative SQL facts. Answer from it.
   Do not invent ticket IDs, severities, or counts that are not in TICKET DATA.
+- confidence in TICKET DATA is the model's own triage confidence for that ticket —
+  never invent a different number (e.g. reporting 100%/1.0 because a row matched
+  the user's filter is wrong; that is not what "confidence" means here).
+- open_for in TICKET DATA is real elapsed time since the ticket was created —
+  never claim there is no age/timestamp data available; if the user asked for an
+  age-based filter ("open for more than N hours") it was already applied in the
+  query, so every row shown already matches it.
+- You cannot approve, reassign, or otherwise write to a ticket yourself — you have
+  no tool for it. If asked to "approve X", identify the ticket(s) from TICKET DATA
+  by name and status, then tell the user to use the "Bulk approve & route" button
+  under this answer (admin-only) or the ticket's own Approve action — never claim
+  you can't find a ticket that legitimately appears in TICKET DATA just because
+  approving isn't something you can do.
 - Stay conversational and two-way: acknowledge the user, answer, and invite a follow-up.
 """
 )
@@ -96,14 +110,42 @@ _MEMORY_PATTERNS = (
     r"\bprevious (message|question|turn)\b",
 )
 
-_TICKET_ID_RE = re.compile(r"\b((?:INC|CHG|REQ|PRB|TKT)[-_]?\d{3,})\b", re.I)
+# \d{3,} previously required 3+ digits, matching only the zero-padded synthetic
+# seed IDs (INC0000001). The real live Jira board numbers issues INC-1..INC-63 —
+# 1-2 digits — which silently never matched at all, so "approve INC-52" or any
+# reference to a real low-numbered ticket fell through to the general KB search
+# instead of the live ticket table. The prefix + required separator already
+# rules out matching an unrelated bare number, so \d+ is safe.
+_TICKET_ID_RE = re.compile(r"\b((?:INC|CHG|REQ|PRB|TKT)[-_]?\d+)\b", re.I)
 _TEAM_RE = re.compile(r"\b(ops|azure|aws|gcp)\b", re.I)
-_SEVERITY_RE = re.compile(r"\b(S[1-4]|sev(?:erity)?\s*[1-4]|p[1-4])\b", re.I)
-_TICKET_INTENT_RE = re.compile(
-    r"\b(ticket|tickets|incident|incidents|queue|sla|severity|severities|"
-    r"assigned|triage|open tickets|how many|count of|list of)\b",
+# Legacy S1-4/P1-4 codes AND the actual Jira Priority names the rest of the
+# system speaks (tickets.severity stores "Highest"/"High"/"Medium"/"Low", never
+# a code) — this regex previously only recognized the codes, so "highest
+# priority incidents" or "priority as highest" never registered as a severity
+# mention at all.
+_SEVERITY_RE = re.compile(r"\b(S[1-4]|sev(?:erity)?\s*[1-4]|p[1-4]|highest|high|medium|low)\b", re.I)
+# "ticket(s)" was previously the only noun this function recognized — "issues"
+# and "incidents" (both common ways people actually ask for the same thing,
+# see the unused _TICKET_INTENT_RE this replaces below) fell through to the
+# general KB/RAG path instead of the live ticket table.
+_TICKET_NOUN_RE = re.compile(r"\b(tickets?|issues?|incidents?)\b", re.I)
+# "open for more than 8 hours" / "older than 2 days" / "less than 30 minutes" —
+# a real gap: nothing parsed a duration at all, so the SQL path had no way to
+# filter or report ticket age and would tell the user it had no timestamps
+# (untrue; every ticket has created_at, this function just never read one out).
+_AGE_RE = re.compile(
+    r"\b(more than|older than|over|at least|greater than|"
+    r"less than|under|within|younger than)\s+(\d+)\s*"
+    r"(hour|hours|hr|hrs|day|days|minute|minutes|min|mins)\b",
     re.I,
 )
+_AGE_GTE_WORDS = {"more than", "older than", "over", "at least", "greater than"}
+_AGE_UNIT_MINUTES = {"hour": 60, "hr": 60, "day": 1440, "minute": 1, "min": 1}
+
+
+def _age_unit_minutes(unit: str) -> int:
+    key = unit.lower().rstrip("s")
+    return _AGE_UNIT_MINUTES.get(key, 60)
 
 
 def fit_chunks(chunks: list[RetrievedChunk], budget: int = MAX_CONTEXT_CHARS) -> list[RetrievedChunk]:
@@ -245,8 +287,12 @@ def looks_like_ticket_query(text: str) -> bool:
     )
     if any(m in lower for m in sql_markers):
         return True
-    if "ticket" in lower and (_TEAM_RE.search(raw) or _SEVERITY_RE.search(raw)):
-        if any(m in lower for m in ("list", "show", "count", "how many", "status", "assigned", "open")):
+    if _TICKET_NOUN_RE.search(raw) and (_TEAM_RE.search(raw) or _SEVERITY_RE.search(raw) or _AGE_RE.search(raw)):
+        action_words = (
+            "list", "show", "count", "how many", "status", "assigned", "open",
+            "fetch", "get", "give", "provide", "pull", "find", "all",
+        )
+        if any(m in lower for m in action_words):
             return True
     return False
 
@@ -305,7 +351,21 @@ def _build_ticket_where(
             params[f"{key}_exact"] = tid
         where.append("(" + " OR ".join(id_clauses) + ")")
 
-    has_filters = bool(ids or teams or severities)
+    age_match = _AGE_RE.search(q)
+    has_age_filter = bool(age_match)
+    if age_match:
+        direction, amount, unit = age_match.group(1).lower(), int(age_match.group(2)), age_match.group(3)
+        minutes = amount * _age_unit_minutes(unit)
+        cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(minutes=minutes)
+        if direction in _AGE_GTE_WORDS:
+            # "open for more than N hours" -> created at or before (now - N) -> older than N.
+            where.append("created_at <= :age_cutoff")
+        else:
+            # "open for less than N hours" -> created after (now - N) -> younger than N.
+            where.append("created_at >= :age_cutoff")
+        params["age_cutoff"] = cutoff.isoformat(sep=" ")
+
+    has_filters = bool(ids or teams or severities or has_age_filter)
     return " AND ".join(where), params, ids, want_count, has_filters
 
 
@@ -382,8 +442,8 @@ def fetch_ticket_context(question: str, limit: int = 12) -> str:
             else:
                 rows = s.execute(
                     text(
-                        f"SELECT external_id, id, assigned_team, severity, status, title, "
-                        f"substr(coalesce(body_masked,''), 1, 240) "
+                        f"SELECT external_id, id, assigned_team, severity, status, confidence, "
+                        f"created_at, title, substr(coalesce(body_masked,''), 1, 240) "
                         f"FROM tickets WHERE {where_sql} "
                         f"ORDER BY updated_at DESC LIMIT :limit"
                     ),
@@ -392,18 +452,37 @@ def fetch_ticket_context(question: str, limit: int = 12) -> str:
                 if not rows and not has_filters:
                     rows = s.execute(
                         text(
-                            "SELECT external_id, id, assigned_team, severity, status, title, "
-                            "substr(coalesce(body_masked,''), 1, 240) "
+                            "SELECT external_id, id, assigned_team, severity, status, confidence, "
+                            "created_at, title, substr(coalesce(body_masked,''), 1, 240) "
                             "FROM tickets ORDER BY updated_at DESC LIMIT :limit"
                         ),
                         {"limit": min(limit, 8)},
                     ).fetchall()
                 lines.append(f"MATCHED_ROWS: {len(rows)}")
-                for ext, tid, team, sev, status, title, body in rows:
+                now = datetime.now(timezone.utc).replace(tzinfo=None)
+                # confidence is the model's own triage confidence (0-1, stored per
+                # ticket) — not "how well this row matches your filter" (that's
+                # always 1.0 for anything that made it through the WHERE clause
+                # and isn't a useful number to report). age_open is real elapsed
+                # time since created_at (the incident's actual start — see
+                # ai/agents.py::ingest_and_triage for where that's set from Jira's
+                # "created" field). Neither was selected before, so the model had
+                # nothing real to cite for either and would either invent a number
+                # or claim it had no timestamps at all — untrue, it just wasn't
+                # given one.
+                for ext, tid, team, sev, status, confidence, created_at, title, body in rows:
                     body_one = (body or "").replace("\n", " ")
+                    conf_pct = f"{confidence * 100:.0f}%" if confidence is not None else "-"
+                    if created_at:
+                        created_dt = created_at if isinstance(created_at, datetime) else datetime.fromisoformat(str(created_at))
+                        age_hours = (now - created_dt).total_seconds() / 3600
+                        age_str = f"{age_hours:.1f}h"
+                    else:
+                        age_str = "-"
                     lines.append(
                         f"- {ext or tid} | team={team or '-'} | sev={sev or '-'} | "
-                        f"status={status or '-'} | title={title or '-'} | body={body_one}"
+                        f"status={status or '-'} | confidence={conf_pct} | open_for={age_str} | "
+                        f"title={title or '-'} | body={body_one}"
                     )
     except Exception as exc:  # noqa: BLE001 - never take down the chat turn
         log.warning("ticket SQL lookup failed: %s", exc)

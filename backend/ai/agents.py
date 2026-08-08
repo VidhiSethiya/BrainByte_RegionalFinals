@@ -25,7 +25,7 @@ from typing import Annotated, Any, TypedDict
 
 from langgraph.graph import END, START, StateGraph
 
-from ai.llm import chat_json, chat_messages
+from ai.llm import chat, chat_json, chat_messages
 from ai.prompts import (
     DUPLICATE_CHECK_PROMPT,
     FEATURE_EXTRACT_PROMPT,
@@ -34,6 +34,7 @@ from ai.prompts import (
     REFLECT_PROMPT,
     ROUTE_DECIDE_PROMPT,
     SEVERITY_ASSESS_PROMPT,
+    SUGGEST_FIRST_ACTION_PROMPT,
     TRIAGE_CLASSIFY_PROMPT,
     TRIAGE_POLICY_CHECK_PROMPT,
 )
@@ -639,18 +640,32 @@ def _rule_route(application: str) -> str:
     return "ops"
 
 
-def _suggest_first_action(chunks: list[RetrievedChunk]) -> str:
-    """Best-effort excerpt from a retrieved runbook, not a generated
-    recommendation — so it never needs its own groundedness check, and it can
-    never be more than what a human already wrote down. The system recommends;
-    it does not act."""
-    for c in chunks:
-        if c.metadata.get("doc_type") == "runbook":
-            text = c.text
-            marker = text.lower().find("fix")
-            snippet = text[marker : marker + 240] if marker != -1 else text[:240]
-            return f"See {c.filename} [{c.label}]: {snippet.strip()}"
-    return "No matching runbook found in the knowledge base — engineer judgement required."
+def _suggest_first_action(
+    ticket: Ticket,
+    category: str,
+    subcategory: str,
+    severity: str,
+    trace: Any = None,
+) -> str:
+    """LLM-generated first troubleshooting step, from the ticket's own details
+    only — deliberately given no retrieved context, so it cannot excerpt or
+    cite a runbook or a prior incident. Trades away the free groundedness
+    guarantee of the old excerpt-only version on purpose; see
+    SUGGEST_FIRST_ACTION_PROMPT for the guardrails that keep the ask narrow."""
+    ticket_text = f"{ticket.title}\n{ticket.body_masked}".strip()
+    text = chat(
+        SUGGEST_FIRST_ACTION_PROMPT.format(
+            ticket_text=ticket_text or "(no ticket text provided)",
+            application=ticket.application or "unknown",
+            category=category or "unknown",
+            subcategory=subcategory or "unknown",
+            severity=severity or "Medium",
+        ),
+        tier="standard",
+        trace=trace,
+    )
+    text = (text or "").strip()
+    return text or "No recommendation available — engineer judgement required."
 
 
 def triage_route(state: TriageState) -> TriageState:
@@ -681,7 +696,13 @@ def triage_route(state: TriageState) -> TriageState:
         "assigned_team": verdict.assigned_team,
         "route_confidence": verdict.confidence,
         "route_rationale": verdict.rationale,
-        "suggested_first_action": _suggest_first_action(chunks),
+        "suggested_first_action": _suggest_first_action(
+            ticket,
+            state.get("category", ""),
+            state.get("subcategory", ""),
+            state.get("severity", "Medium"),
+            trace,
+        ),
     }
 
 

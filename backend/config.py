@@ -53,6 +53,17 @@ class Settings:
     LLM_PROVIDER = os.getenv("LLM_PROVIDER", "local").strip().lower()
     OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "ollama")
     OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "http://localhost:11434/v1")
+    # Chat/generation endpoint, deliberately independent of OPENAI_BASE_URL/
+    # OPENAI_API_KEY above — those two are also what ai/llm.py::get_embeddings()
+    # uses, and embeddings must stay pinned to whatever service actually
+    # produced the vectors already sitting in Chroma (see that function's
+    # docstring — mixing embedding spaces silently corrupts similarity search).
+    # Repointing OPENAI_BASE_URL itself to swap chat providers would therefore
+    # also break every retrieval/indexing call for a provider with no
+    # embeddings endpoint at all (e.g. DeepSeek). Defaults to the same values
+    # as OPENAI_BASE_URL/OPENAI_API_KEY, so leaving these unset changes nothing.
+    LLM_BASE_URL = os.getenv("LLM_BASE_URL", "").strip() or OPENAI_BASE_URL
+    LLM_API_KEY = os.getenv("LLM_API_KEY", "").strip() or OPENAI_API_KEY
     LLM_MODEL = os.getenv("LLM_MODEL", "llama-3.2-3b-it:latest")       # standard tier
     FAST_LLM_MODEL = os.getenv("FAST_LLM_MODEL", LLM_MODEL)
     # Hosted embedding default — changing this invalidates Chroma; reseed after swap.

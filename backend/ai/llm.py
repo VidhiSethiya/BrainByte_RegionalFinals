@@ -142,8 +142,10 @@ def resolve_provider() -> dict[str, Any]:
 
     hosted = {
         "name": "hosted",
-        "base_url": settings.OPENAI_BASE_URL,
-        "api_key": settings.OPENAI_API_KEY,
+        # LLM_BASE_URL/LLM_API_KEY, not OPENAI_BASE_URL/OPENAI_API_KEY — chat's
+        # provider is independent of embeddings' (see config.py::LLM_BASE_URL).
+        "base_url": settings.LLM_BASE_URL,
+        "api_key": settings.LLM_API_KEY,
     }
     try:
         probe = ChatOpenAI(
