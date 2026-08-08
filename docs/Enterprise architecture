@@ -1,0 +1,1217 @@
+# TicketSphere — Enterprise Architecture & Solution Documentation
+
+**Product:** TicketSphere — Application Maintenance Intelligent Ticket Triage Agent
+**Version:** 1.0
+**Classification:** Internal / Hackathon submission
+**Companion document:** [`FLOW.md`](FLOW.md) — the demo-perspective narrative walkthrough
+
+This is the reference document: contracts, schemas, decision records, non-functional
+characteristics, and the honest limits of the current build. `FLOW.md` tells the
+story; this tells you how to operate, extend and audit it.
+
+---
+
+## Table of contents
+
+1. [Executive summary](#1-executive-summary)
+2. [Problem statement and solution mapping](#2-problem-statement-and-solution-mapping)
+3. [Business case and success metrics](#3-business-case-and-success-metrics)
+4. [Architecture decision records](#4-architecture-decision-records)
+5. [System architecture](#5-system-architecture)
+6. [Component inventory](#6-component-inventory)
+7. [Data architecture](#7-data-architecture)
+8. [Agentic architecture](#8-agentic-architecture)
+9. [Retrieval architecture (RAG)](#9-retrieval-architecture-rag)
+10. [Model strategy](#10-model-strategy)
+11. [Prompt and context engineering](#11-prompt-and-context-engineering)
+12. [Responsible AI and guardrails](#12-responsible-ai-and-guardrails)
+13. [Security, identity and access governance](#13-security-identity-and-access-governance)
+14. [Integration architecture](#14-integration-architecture)
+15. [API reference](#15-api-reference)
+16. [Observability and evaluation](#16-observability-and-evaluation)
+17. [Testing and quality assurance](#17-testing-and-quality-assurance)
+18. [Non-functional characteristics](#18-non-functional-characteristics)
+19. [Deployment and environments](#19-deployment-and-environments)
+20. [Operations runbook](#20-operations-runbook)
+21. [Known limitations and roadmap](#21-known-limitations-and-roadmap)
+22. [Glossary](#22-glossary)
+
+---
+
+## 1. Executive summary
+
+TicketSphere is a multi-agent AI system that performs **first-line triage of
+application-maintenance tickets**. It ingests tickets from Jira, de-identifies
+them, retrieves organisational precedent, and produces a **classified, prioritised,
+routed decision with cited evidence and a computed confidence score** — then either
+writes that decision back to Jira automatically or holds it for human approval,
+according to explicit risk rules.
+
+**What is architecturally distinctive:**
+
+| Property | How it is achieved |
+|---|---|
+| **Decisions are explainable** | Every decision carries the retrieved passages it was based on, an inline-cited rationale, and a named reason for its confidence level |
+| **Numbers are arithmetic, not opinion** | Confidence, SLA targets, escalation rules and every aggregate count are computed in Python or SQL; the model contributes judgement about evidence only |
+| **Governance is architectural, not procedural** | Access control is a clause inside the retrieval query and the SQL query, not a filter applied afterwards |
+| **Nothing high-risk acts autonomously** | Highest-priority and low-confidence decisions require human approval; the only write-capable tool refuses unapproved decisions independently of the route that called it |
+| **The system degrades, never goes silent** | Hosted gateway → local model; model routing → deterministic rules → human queue; every failure path terminates in "a human sees it" |
+| **Quality is measured, not asserted** | Held-out labelled tickets, confusion matrix, per-team fairness, retrieval A/B, and a hash-chained audit log |
+
+**Technology:** Flask + LangGraph + Chroma + SQLite behind a Vite / React 19 /
+Ant Design console, with three model tiers on the TCS GenAI Lab gateway and local
+Ollama as an automatic fallback.
+
+---
+
+## 2. Problem statement and solution mapping
+
+| Requirement from the problem statement | Where it is implemented | Status |
+|---|---|---|
+| Multi-agent system | 10-node LangGraph triage graph + 4-node KB chat graph (`backend/ai/agents.py`) | Built |
+| Ticket ingestion agent | `triage_normalize` + `integrations/{jira,synthetic,poller}.py` + webhook | Built |
+| NLP-based classification | `triage_classify` — 10-category enum, subcategory, affected service | Built |
+| Prioritisation | `triage_assess` — Jira Priority name + 0–100 in-band score against the SLA matrix | Built |
+| Routing to teams/individuals | `triage_route` — team from the service catalogue; **team-level only, by policy** | Built (team, not individual) |
+| Advanced UI: queues, priority scores, routing decisions | `/queue`, `/control`, `/history`, `/triage`, decision drawer | Built |
+| Override capability | `PATCH /api/tickets/<id>/override` with mandatory reason, audited, synced to Jira | Built |
+| Two-way ticketing API sync | Jira Cloud REST v3: poll in; priority + label + comment + transition out | Built |
+| Classification accuracy metric | `POST /api/evals/run-triage` over held-out labelled tickets | Built |
+| Resolution-time reduction metric | SLA target vs elapsed, at-risk counts, throughput chart | Partially — leading indicators only, see §3 |
+| Routing precision metric | Per-team precision/recall + confusion matrix on `/evals` | Built |
+| Live triage demo | `/triage` — paste a ticket, watch the graph run | Built |
+| Multi-agent coordination demo | Node-by-node trace, per-stage latency/tokens/cost | Built |
+| Test automation | Eval suites for KB, triage accuracy and retrieval A/B, invocable via API | Built |
+| Full documentation | This document + `FLOW.md` + `PRIORITY_RULEBOOK.md` + `JUDGES_QA.md` + `CLAUDE.md` | Built |
+| Privacy compliance for sensitive data | Two-pass de-identification on ingest, PII leak scan on output, chunk-level ACL | Built |
+| Synthetic ticket datasets with varied severity | 500 generated tickets, 100 held out with gold labels | Built |
+
+**Deliberate scope decisions:**
+
+- **Routing is to a team, never to a named individual.** Encoded in the system
+  persona (*"never name an individual engineer as accountable"*). Auto-assigning
+  work to a person is an HR-adjacent decision an AI should not make unsupervised.
+- **The system recommends a first action; it never executes one.** No remediation
+  tool exists. The only write capability is metadata on the ticket.
+
+---
+
+## 3. Business case and success metrics
+
+### The cost being addressed
+
+Manual first-line triage in a four-team application-maintenance organisation is
+a per-ticket cost paid by a senior engineer — reading, judging severity, judging
+ownership, and moving the ticket. Three failure modes compound it:
+
+1. **Latency to the right team.** A misrouted ticket does not start its real clock
+   until it is re-routed; that time is invisible in most SLA reporting because the
+   SLA clock started at creation.
+2. **Inconsistency.** The same ticket triaged by two people, or by one person on
+   Monday and Friday, gets different priorities. That variance is what makes SLA
+   commitments unreliable rather than the SLA targets themselves.
+3. **No reconstructable rationale.** Nobody can explain months later why a ticket
+   was a P1, which makes both audit and process improvement impossible.
+
+### Metrics, and how each is actually measured
+
+| Metric | Definition | Measurement source | Status |
+|---|---|---|---|
+| **Classification accuracy** | Predicted category == gold category | `score_triage_accuracy()` over `tickets.true_category` where `held_out=true` | Measured |
+| **Routing precision** | Predicted team == gold team, per team and overall | `true_team`, with a per-team precision/recall table and a confusion matrix | Measured |
+| **Priority MAE** | Mean absolute error in priority band distance | `true_severity` vs computed | Measured |
+| **Override rate** | Human overrides ÷ decisions | `tickets.overridden_by` count ÷ total, on Control Tower | Measured |
+| **Groundedness** | Share of answer claims supported by retrieved context | LLM-scored, thresholded at 0.25 / 0.5 | Measured |
+| **Hallucination rate** | `1 − groundedness` on the KB eval set | `eval_results` | Measured |
+| **Refusal correctness** | The eval set includes questions that **must** be refused | `EVAL_SET` (12 questions, ≥2 unanswerable) | Measured |
+| **Fairness** | Per-team over/under-severitisation rates | Fairness table on `/evals` | Measured |
+| **Cost per triage** | Tokens × tier price, per ticket | `triage_runs.cost_usd`, `Trace` | Measured |
+| **P95 latency** | Per request and per stage | `usage_summary()` | Measured |
+| **Time-to-first-touch** | Ticket creation → routed status | Derivable from `tickets.created_at` / `updated_at` | Leading indicator |
+| **Mean time to resolution** | Requires resolved-state data over weeks | — | **Not measurable in a hackathon window**; the honest position is that TTFT and routing precision are the leading indicators that drive it |
+
+> **Stated plainly:** MTTR reduction cannot be demonstrated in 24 hours with
+> synthetic data. Claiming a percentage would be fabrication. What is demonstrable
+> is that every ticket is triaged in seconds instead of minutes, routed correctly
+> at a measured precision, and that every misroute is caught by a human whose
+> correction is captured as a training signal.
+
+---
+
+## 4. Architecture decision records
+
+### ADR-001 — Jira Cloud as the reference ticketing system
+
+**Decision.** Build the reference integration against Jira Cloud REST v3
+(project `SCRUM`, team-managed Software project).
+
+**Rationale.**
+
+1. **Adoption.** Application-maintenance squads already run their sprints in
+   Jira. Writing decisions back onto the Jira issue means the benefit reaches an
+   engineer who never opens our product.
+2. **Versatility beyond the incident.** Unlike a pure ITSM tool, Jira natively
+   models **story points, sprints, epics and a team picker** alongside the issue.
+   Application maintenance is capacity planning as much as incident response — a
+   triage system that can see both severity *and* the receiving team's committed
+   sprint load makes a materially better routing decision. Jira exposes both
+   through one API.
+3. **Integration difficulty proves the pattern.** ADF bodies, per-site custom
+   field IDs, per-project workflow transition names, GDPR-redacted user objects
+   and 429 handling make this a real enterprise integration rather than a toy.
+
+**Consequences and mitigations.** Vendor coupling is confined to one file behind
+the `TicketSource` interface (§14). ServiceNow, Zendesk or Remedy are additional
+implementations of the same four methods with no change elsewhere. The `tickets`
+table keys on `(source, external_id)` so multiple sources coexist.
+
+**Rejected alternatives.** ServiceNow (correct for pure ITSM but no engineering
+capacity model, and no accessible sandbox in the build window); a bespoke ticket
+API (would have proven nothing about enterprise integration).
+
+### ADR-002 — LangGraph over a linear chain or an autonomous agent loop
+
+**Decision.** Model the pipeline as an explicit state graph with typed state.
+
+**Rationale.** Two edges route *backwards* (`grade → enrich`, `reflect → enrich`),
+which a linear chain cannot express. An open-ended ReAct-style agent loop could
+express it but offers no bound on iterations, no guarantee about which decisions
+were made in which order, and no per-node model tiering. A graph gives explicit,
+auditable control flow with hard-capped loops.
+
+**Consequence.** Every path terminates in a bounded number of steps: worst case
+`enrich`/`grade` is visited three times (initial + one grade rewrite + one reflect
+retry).
+
+### ADR-003 — Hybrid retrieval (dense + BM25 + RRF) as the default
+
+**Decision.** `RETRIEVAL_MODE=hybrid`.
+
+**Rationale.** Ticket corpora are identifier-heavy: `INC0012345`, `ORA-01555`,
+`HTTP 504`, instance IDs. Dense embeddings blur exact tokens — two different error
+codes occupy nearly the same vector space. BM25 matches them exactly. The product's
+core operation is *find the precedent with this error code*.
+
+**Evidence.** Both modes are implemented and compared by `run_retrieval_ab()` over
+a 12-probe set; the mode is one environment variable. The choice is measured, not
+assumed.
+
+### ADR-004 — Two stores (SQLite + Chroma) rather than one
+
+**Decision.** Relational data in SQLite; vectors in Chroma; one module
+(`db/vectordb/vector_store.py`) as the only code that talks to Chroma.
+
+**Rationale.** They answer different questions — exact ordered rows versus nearest
+meaning. A vector store cannot serve "the AWS team's open tickets by age"; a
+relational store without a vector index must compare against every stored vector
+on every triage.
+
+**Migration path.** **pgvector** does both well and is the correct move the moment
+a ticket row and its embeddings must update in one transaction. Because
+`vector_store.py` is the sole vector-touching module, that migration is one file.
+
+### ADR-005 — Three model tiers rather than one model
+
+**Decision.** `deep` / `standard` / `fast`, selected per node.
+
+**Rationale.** Cost and latency scale with call volume, which is dominated by
+mechanical tasks (grading, guardrail JSON, feature extraction). Correctness risk
+concentrates in two nodes (`assess`, `reflect`). Paying reasoning-model prices to
+grade a chunk is waste; asking a mini model to set a priority that pages an
+on-call is negligence. See §10.
+
+### ADR-006 — Confidence computed in code as `min(gates)`, not self-reported
+
+**Decision.** The model's self-reported confidence is captured but is **not** the
+confidence shown or acted upon. The operative confidence is the minimum of three
+named gates computed in Python.
+
+**Rationale.** Self-reported LLM confidence is uncalibrated against real-world
+outcome rates and cannot be audited. Averaging gates hides the single reason to
+doubt. Taking the minimum means any one weak signal caps the decision — and
+removes the "where did this weight come from?" question entirely, because there
+are no weights.
+
+**Consequence.** Every decision records which gate limited it
+(`confidence_limited_by`), turning a score into a question a human can settle.
+
+### ADR-007 — Polling as the primary ingestion path
+
+**Decision.** Poll on a watermark every 30 seconds; keep the webhook as a
+secondary path.
+
+**Rationale.** The demo environment has outbound-only internet with no public
+inbound URL for Jira to call back to. Polling requires nothing inbound. The
+watermark makes polling idempotent and restart-safe, which a webhook alone is not.
+
+**Consequence.** The webhook route exists, shares the exact same normalisation
+function, and is demoed with `curl`. It is currently unauthenticated and would
+require a shared-secret header before facing a real network.
+
+---
+
+## 5. System architecture
+
+```mermaid
+flowchart TB
+    subgraph clients [Presentation]
+        UI["React 19 + Ant Design console<br/>queue · control · triage · history<br/>KB · evals · usage · chat drawer"]
+    end
+
+    subgraph api [Application — Flask, /api]
+        AUTH["JWT auth · RBAC · rate limit<br/>Pydantic validation · trace id"]
+        ROUTES["Ticket · document · search · chat<br/>analytics · eval · audit routes"]
+    end
+
+    subgraph agents [AI orchestration — LangGraph]
+        TG["Triage graph — 10 nodes"]
+        CG["KB chat graph — 4 nodes"]
+        TOOLS["Tool registry<br/>single authorisation choke point"]
+    end
+
+    subgraph guard [Responsible AI]
+        IG["Input guard<br/>injection · PII · length"]
+        OG["Output guard<br/>groundedness · policy · leak"]
+        ACL["Access control<br/>query-time ACL"]
+        AUD["Hash-chained audit log"]
+    end
+
+    subgraph knowledge [Knowledge & data]
+        CHROMA[("Chroma<br/>knowledge_base<br/>3072-dim vectors")]
+        SQLITE[("SQLite<br/>10 tables")]
+    end
+
+    subgraph models [Model gateway]
+        DEEP["deep — gpt-5.1"]
+        STD["standard — gpt-4.1"]
+        FAST["fast — gpt-4.1-mini"]
+        EMB["embeddings — text-embedding-3-large"]
+        LOCAL["local fallback — Ollama"]
+    end
+
+    subgraph ext [Enterprise systems]
+        JIRA["Jira Cloud REST v3"]
+        SYN["Synthetic source — offline"]
+        MAIL["Resend — SLA email"]
+    end
+
+    UI --> AUTH --> ROUTES
+    ROUTES --> TG & CG
+    TG --> TOOLS --> JIRA
+    JIRA -->|poll · watermark| POLLER["Background poller"] --> TG
+    SYN --> POLLER
+    TG --> IG & OG
+    TG --> CHROMA & SQLITE
+    CG --> CHROMA & SQLITE
+    TG --> DEEP & STD & FAST
+    CHROMA --- EMB
+    DEEP -.fallback.-> LOCAL
+    ACL --- CHROMA
+    ACL --- SQLITE
+    TG --> AUD
+    SQLITE --> MAIL
+```
+
+### Layer boundaries
+
+The architecture contract is fixed in [`CLAUDE.md`](../CLAUDE.md). The rules that
+matter for review:
+
+| Rule | Why |
+|---|---|
+| **No module outside `backend/config.py` calls `os.getenv`** | One source of truth for configuration; no hidden environment coupling |
+| **No module in `backend/` touches a datastore directly** | All access goes through `db.sqlite.models` or `db.vectordb.vector_store`, which is what makes the pgvector migration a one-file change |
+| **Handoffs between graph nodes are validated Pydantic objects** | A node never passes free text to another node; a malformed model response becomes a schema default, not corrupted downstream state |
+| **All ticketing systems are reached through `TicketSource`** | Vendor coupling confined to one file per vendor |
+| **Every write tool re-checks authorisation itself** | The route that set a status is never trusted as sufficient evidence of approval |
+
+---
+
+## 6. Component inventory
+
+| Path | Responsibility |
+|---|---|
+| `backend/run.py` | App factory; mounts `/api`; starts poller and SLA monitor threads |
+| `backend/config.py` | Single configuration source of truth |
+| `backend/api.py` | All HTTP routes, auth/RBAC/rate-limit/pagination plumbing, response envelope |
+| `backend/ai/agents.py` | Both LangGraphs, all node implementations, `ingest_and_triage()`, confidence maths |
+| `backend/ai/llm.py` | Model tier routing, provider probe and fallback, JSON extraction, embeddings, parallel fan-out |
+| `backend/ai/prompts.py` | Every prompt, and the untrusted-data fence |
+| `backend/ai/tools.py` | Tool registry and the single authorisation choke point |
+| `backend/rag/rag_retriever.py` | Hybrid retrieval, RRF, rerank, query rewrite/decompose, CRAG grading |
+| `backend/rag/rag_indexer.py` | Document and ticket indexing pipeline |
+| `backend/rag/chunker.py` | Section-aware chunking with page markers |
+| `backend/rag/embeddings.py` | Batched embedding with failure isolation |
+| `backend/rag/anonymizer.py` | Ingest-time de-identification |
+| `backend/rag/multimodal.py` | PDF/image extraction with vision fallback |
+| `backend/rag/schemas.py` | Every Pydantic contract; the SLA lookup table |
+| `backend/guardrails/input_guard.py` | Length, injection regex, PII mask, LLM injection classifier |
+| `backend/guardrails/output_guard.py` | Shape, PII leak, groundedness, policy |
+| `backend/guardrails/pii.py` | Detection and masking patterns |
+| `backend/guardrails/governance/access_control.py` | Query-time ACL construction |
+| `backend/guardrails/governance/audit.py` | Hash-chained append-only audit log |
+| `backend/integrations/ticket_source.py` | The `TicketSource` interface |
+| `backend/integrations/jira.py` | Jira Cloud adapter, ADF conversion, priority mapping |
+| `backend/integrations/synthetic.py` | Offline seed-file source |
+| `backend/integrations/poller.py` | Watermarked poll loop with bounded parallel triage |
+| `backend/integrations/sla_monitor.py` | SLA breach detection thread |
+| `backend/integrations/notifications.py` | Resend HTTPS email transport |
+| `backend/observability/telemetry.py` | Traces, stage timings, token/cost accounting |
+| `backend/observability/evals.py` | KB eval set, retrieval A/B, triage accuracy scoring |
+| `backend/chatbot/*` | Session, memory, context and conversation management |
+| `db/sqlite/models.py` | ORM models, engine, session factory, additive migration |
+| `db/vectordb/vector_store.py` | The only module that talks to Chroma |
+| `db/vectordb/seed_vector_db.py` | Corpus generation and bulk indexing |
+| `db/inspect_db.py` | Cross-store inspector and consistency check |
+| `frontend/src/api/client.ts` | The single HTTP client; no `fetch` in components |
+| `frontend/src/pages/*` | One file per screen |
+| `frontend/src/components/DecisionDrawer.tsx` | The decision artefact — rationale, citations, evidence, actions |
+
+---
+
+## 7. Data architecture
+
+### 7.1 Relational store — SQLite (`db/sqlite/data/app.db`)
+
+| Table | Purpose | Key columns |
+|---|---|---|
+| `users` | Identity and clearance | `username`, `password_hash` (Werkzeug salted), `role`, `clearances` (JSON), `email` |
+| `tickets` | The operational governance record | `external_id` + `source` (unique together), `title`, `body_masked`, `reporter`, `assignee`, `application`, `environment`, `category`, `subcategory`, `severity`, `priority_score`, `assigned_team`, `status`, `confidence`, `needs_human`, `overridden_by`, `override_reason`, `true_category`/`true_severity`/`true_team`, `held_out`, `sync_attempts`, `last_error`, `sla_warning_sent_at` |
+| `triage_runs` | One row per agent execution | `ticket_id`, `decision_json`, `model`, `tier`, `tokens`, `cost_usd`, `latency_ms`, `trace_id`, `guardrails_fired` |
+| `documents` | KB governance record | `filename`, `modality`, `allowed_roles`, `sensitivity`, `chunk_count`, `attributes` (doc_type/team/service) |
+| `chat_sessions` / `chat_messages` | Conversation state | `summary`; per-message `citations`, `latency_ms`, tokens, `groundedness`, `blocked_reason` |
+| `audit_log` | Append-only hash chain | `action`, `resource`, `details`, `prev_hash`, `entry_hash` |
+| `feedback` | Human correction signal | `message_id`, `rating` (±1), `comment`, `corrected_answer`, `reviewed` |
+| `eval_results` | Persisted eval runs | `groundedness`, `context_precision`, `context_recall`, `hallucination` |
+| `sync_state` | Ingestion watermark | `source` (PK), `watermark` |
+
+**Ticket status lifecycle:**
+
+```
+new → triaged → awaiting_approval → routed → synced
+                        ↘ failed (dead letter, still visible to a human)
+```
+
+**Schema evolution.** `Base.metadata.create_all()` only creates missing tables; it
+never alters an existing one. `_migrate_sqlite_columns()` runs on every boot and
+adds missing columns additively, so a live database never needs a manual wipe
+because the schema grew.
+
+### 7.2 Vector store — Chroma (`db/vectordb/data/chroma/`)
+
+| Property | Value |
+|---|---|
+| Collection | `knowledge_base` |
+| Distance | Cosine (`hnsw:space: cosine`); score = `1.0 − distance` |
+| Vector dimension | 3072 (`text-embedding-3-large`) |
+| Chunk size / overlap | 900 / 150 characters |
+| Chunk metadata | `doc_id`, `filename`, `doc_type`, `team`, `service`, `severity`, `category`, `environment`, `resolved`, `modality`, `sensitivity`, `allowed_roles`, `acl_<role>` booleans, `page` |
+
+Chunking uses a separator order tuned to ticket and runbook structure —
+`## Symptom`, `## Diagnosis`, `## Fix`, `Steps to reproduce`, `Environment`, `Logs`
+— so a chunk boundary lands between sections rather than mid-procedure. PDF pages
+carry `[[PAGE:n]]` markers so a citation can name a page.
+
+> A file named `chroma.sqlite3` inside the Chroma directory is **Chroma's own
+> internal storage**, not a third database. Never edit it directly.
+
+### 7.3 Corpora
+
+| Corpus | `doc_type` | Volume | Notes |
+|---|---|---|---|
+| Historical tickets | `ticket_history` | 400 indexed | The precedent library |
+| Held-out tickets | — | 100 | Gold labels only, **never embedded** — the exam the system cannot study for |
+| Runbooks | `runbook` | 24 | One per team/service pair |
+| Service catalogue | `service_catalog` | 1 | Service → owning team; the routing ground truth |
+| SLA policy | `sla_policy` | 1 | Priority → response/resolution minutes |
+| Escalation matrix | `escalation_matrix` | 1 | `restricted` sensitivity |
+
+**All data is synthetic.** No real customer data, no real incident records, no
+production identifiers. The corpus is generated with deliberate realism — typos,
+half-pasted stack traces, duplicate reports of one outage, and planted secrets that
+exercise the redaction path — because a triage system tested only on clean input is
+not tested.
+
+### 7.4 Data lifecycle and retention
+
+| Data | Retention | Deletion path |
+|---|---|---|
+| Ticket content | Persisted masked; raw text never stored | `DELETE /api/documents/<id>` removes SQLite row and Chroma chunks together |
+| PII | Masked at ingest before storage or embedding | Irreversible for secrets; reversible tokens for structured identifiers |
+| Chat history | Per session, user-deletable | `DELETE /api/sessions/<id>`, `DELETE /api/chatbot/history` |
+| Audit log | Append-only, never deleted by design | Full-store reset only |
+| Uploads | `db/vectordb/data/uploads/` | Removed with the document |
+
+**Prototype-to-enterprise gap:** no automated retention timer, no legal-hold
+support, and no per-tenant encryption at rest. All three are storage-layer concerns
+that move with the pgvector/Postgres migration.
+
+---
+
+## 8. Agentic architecture
+
+### 8.1 Design pattern
+
+**Supervised graph with corrective loops and a human gate.** Not an autonomous
+agent loop: control flow is explicit, node order is fixed, both backward edges are
+capped at one iteration, and the terminal action is gated on a human decision or a
+narrow auto-approve band.
+
+### 8.2 Agent roles
+
+| Node | Role | Model tier | Contract |
+|---|---|---|---|
+| `normalize` | Ingestion & sanitation | fast | raw ticket → masked `Ticket` + guardrail verdict |
+| `enrich` | Evidence gathering | retrieval + fast | ticket → 8 chunks + duplicate verdict |
+| `grade` | Evidence quality control (CRAG) | fast | chunks → filtered chunks + keep/rewrite/none |
+| `classify` | Categorisation | standard | → `TriageVerdict` (category, subcategory, service, confidence, rationale) |
+| `assess` | Severity & priority | **deep** | → `SeverityVerdict` (severity, priority_score, confidence, rationale) |
+| `route` | Ownership | standard | → `RoutingVerdict` (team, confidence, rationale) + suggested first action |
+| `reflect` | Self-critique | **deep** | → `ReflectionVerdict`; may only lower confidence |
+| `verify` | Output guardrails | fast | → groundedness, blocked, guardrails fired |
+| `gate` | Human-in-the-loop | deterministic | → `needs_human`, `escalation_reason` |
+| `sync` | Assembly & persistence | — | → `TriageDecision`, status, `triage_runs` row |
+
+### 8.3 Collaboration model and handoffs
+
+State is a `TypedDict` whose meaningful values are Pydantic models. Each node
+returns a partial state update; LangGraph merges it. **No node passes prose to
+another node.** A model response that fails validation becomes the schema default,
+which is a safe, known value rather than corrupted state — for example a
+`RoutingVerdict` defaulting to deterministic keyword routing with confidence 0.
+
+### 8.4 Retry, reflection and escalation
+
+| Mechanism | Bound | Trigger | Behaviour |
+|---|---|---|---|
+| CRAG rewrite | 1 | grader returns `rewrite` | Re-enter `enrich` with a rewritten query |
+| Reflection retry | 1 | `reflect` reports missing evidence | Re-enter `enrich` |
+| Input blocked | — | guardrail fires at `normalize` | Short-circuit to `gate`; downstream nodes never see the text |
+| Duplicate detected | conf ≥ 0.75 | `enrich` duplicate check | `duplicate_of` set; `gate` escalates |
+| Node exception | — | any uncaught error | `needs_human=True`, `status="failed"`, row preserved |
+
+> **Implementation note worth stating.** Retry counters are incremented **inside
+> the nodes**, never in the conditional-edge routers. LangGraph discards state
+> mutations made inside a router — an earlier version incremented there, so the
+> counter never persisted and a model that kept requesting a rewrite looped
+> `enrich` indefinitely, hanging syncs. Routers now only read state; nodes own
+> their own budget. This class of bug only appears under real model behaviour, not
+> against a canned test response.
+
+**Escalation ladder on failure:**
+
+```
+deep model → fast model → deterministic catalogue routing → unassigned human queue
+```
+
+The system degrades to "a human sees it". It never degrades to silence, and never
+to a guess presented as certainty.
+
+### 8.5 Autonomy boundaries
+
+| Decision | Autonomy |
+|---|---|
+| Classify, assess, route, draft a rationale | Full — read-only, reversible |
+| Write priority/label/comment to Jira | **Only** if `confidence ≥ 0.50` **and** priority ∈ {High, Medium, Low} **and** no guardrail fired **and** not a duplicate |
+| Any `Highest` priority decision | **Never autonomous** — always human approval |
+| Any decision with `confidence < 0.50`, `evidence_coverage < 0.50` or `band_margin < 0.10` | **Never autonomous** |
+| Assign to a named individual | **Not supported by design** |
+| Execute a remediation action | **Not supported by design** |
+
+### 8.6 The KB chat graph
+
+A second, simpler graph — `plan → retrieve → generate → verify` — powers
+`/api/chat` (multi-session assistant) and `/api/chatbot` (a single server-pinned
+session per user, reachable from every page). `plan` decides whether retrieval is
+needed at all; if `verify` finds the answer ungrounded, the graph routes back to
+retrieval **once** with a decomposed query.
+
+**Memory** is retrieval infrastructure, not chat polish: short-term memory replays
+the last 12 turns; long-term memory is a rolling LLM summary refreshed every 6
+turns, which is what lets a follow-up like *"what about the second one?"* be
+rewritten into a standalone retrieval query.
+
+Three question types bypass RAG deliberately: greetings, memory-recall questions,
+and **aggregate ticket questions**, which are answered by SQL tools and only
+narrated by the model.
+
+---
+
+## 9. Retrieval architecture (RAG)
+
+### 9.1 Ingestion pipeline
+
+```
+file / paste / ticket
+  → extract (PyMuPDF; vision model for pages with < 120 chars of text)
+  → anonymize (regex → secret wipe → optional LLM pass)
+  → chunk (900 / 150, section-aware, page markers)
+  → embed (text-embedding-3-large, batch 32)
+  → Chroma upsert with governance metadata
+  → SQLite `documents` / `tickets` mirror
+```
+
+Tickets skip the LLM anonymisation pass at index time because
+`triage_normalize` has already masked them — re-running it would double latency
+and tokens for no benefit.
+
+### 9.2 Query pipeline
+
+| Stage | Parameter | Value |
+|---|---|---|
+| Query rewrite | conversation summary + history | chat surface only |
+| Query decompose | max sub-queries | 3 |
+| Dense candidates | `RETRIEVE_TOP_K` | 20 |
+| Lexical | BM25Okapi, hits with score > 0 | — |
+| Fusion | Reciprocal Rank Fusion, `RRF_K` | 60 |
+| Rerank | cross-encoder `ms-marco-MiniLM-L-6-v2` | available, **off by default** |
+| Final context | `FINAL_TOP_K` (chat) / `TRIAGE_ENRICH_TOP_K` (triage) | 6 / 8 |
+| ACL | Chroma `where` clause | applied **inside** the query |
+| Metadata filters | `doc_type`, `team`, `service`, `environment`, `category`, `severity`, `resolved` | merged into `where` |
+
+**No minimum similarity threshold** is applied at the vector layer — relevance is
+enforced by the CRAG `grade` node instead, which can read the chunks in context
+rather than trusting a distance number. A score cut-off would silently drop a
+correct-but-differently-worded precedent.
+
+**ACL is a query clause, never a post-filter.** A post-filter degrades top-k
+silently for restricted users: ask for 6, retrieve 6, discard 4, show 2. Filtering
+inside the query means a restricted user gets 6 chunks they are entitled to see,
+and unauthorised text never enters the prompt at all. A defence-in-depth
+`can_read()` check runs on the returned set as well.
+
+### 9.3 Why the priority rulebook is injected, not retrieved
+
+`docs/PRIORITY_RULEBOOK.md` is loaded whole into the prompt. Retrieval returns
+*part* of a document; two identical tickets scored against different fragments of
+the same rubric would be silently non-deterministic. A rubric is applied whole or
+it is not a rubric.
+
+---
+
+## 10. Model strategy
+
+### 10.1 Tier assignment and rationale
+
+| Tier | Model | Nodes | Why |
+|---|---|---|---|
+| **deep** | `genailab-maas-gpt-5.1` | `assess`, `reflect` | Highest blast radius. A wrong `Highest` pages an on-call at 3am; a missed `Highest` breaches a contractual SLA. Reflection must be able to genuinely find its own errors, which a weaker model cannot. |
+| **standard** | `azure/genailab-maas-gpt-4.1` | `classify`, `route`, chat generation, suggested action | Constrained decisions over supplied evidence with an enum output space. Strong general capability is sufficient; deep-tier cost is not justified. |
+| **fast** | `azure/genailab-maas-gpt-4.1-mini` | plan, CRAG grade, guardrail JSON, feature extraction, summaries, injection classification | The majority of calls by volume — near-mechanical classification over short inputs. |
+| **embeddings** | `azure/genailab-maas-text-embedding-3-large` (3072-dim) | all indexing and retrieval | **Never tiered.** Two embedding models in one collection either corrupt similarity silently or fail on dimension mismatch. |
+| **vision** | `azure_ai/genailab-maas-Llama-3.2-90B-Vision-Instruct` | scanned pages, screenshots | Keeps image-only evidence searchable instead of indexing empty chunks |
+| **speech** | `azure/genailab-maas-whisper` | voice fallback | Browser Speech API is primary |
+| **local fallback** | `llama-3.2-3b-it` via Ollama | all chat tiers | Automatic when the hosted probe fails |
+
+### 10.2 Determinism and gateway behaviour
+
+- `LLM_TEMPERATURE = 0.1`; `chat_json()` forces `temperature=0` — triage must be
+  reproducible.
+- `_effective_temperature()` overrides to `1.0` for `gpt-5*`/`o1`/`o3` families,
+  which **reject `temperature=0` outright** on this gateway. Without the clamp,
+  every deep-tier call failed mid-triage with `UnsupportedParamsError`.
+- Timeout 60s per call, one retry, all calls wrapped in `with_timeout()`.
+- `@lru_cache` on client, model handle and embedding handle construction. No
+  response caching — a cached triage decision would hide model drift.
+
+### 10.3 Provider resolution and fallback
+
+`resolve_provider()` probes the configured fast model once at boot with a real
+`ping` (10s invoke, 12s wall) and caches the outcome for the process lifetime. On
+failure every chat tier collapses to local Ollama.
+
+**Embeddings deliberately do not follow that split.** They fall back to local
+`gte-large` only when the hosted embedding call itself raises, and log loudly on
+every occurrence, because anything embedded in that window sits in a different
+vector space and requires a reseed once hosted service recovers. This is a stated
+trade-off — dead-lettering every ticket for the duration of an outage was judged
+worse — not a silent one.
+
+### 10.4 Avoiding lock-in
+
+| Swappable | How |
+|---|---|
+| Chat provider | `LLM_BASE_URL` / `LLM_API_KEY`, independent of the embedding endpoint precisely so a chat-only provider (e.g. DeepSeek) does not break retrieval |
+| Model per tier | `LLM_MODEL`, `FAST_LLM_MODEL`, `REASONING_MODEL` |
+| Embedding model | `EMBEDDING_MODEL` — **requires a reseed**, and the config says so |
+| Vector store | One module, `db/vectordb/vector_store.py` |
+| Ticketing system | One class implementing `TicketSource` |
+| Retrieval strategy | `RETRIEVAL_MODE`, `RERANK_ENABLED` |
+
+---
+
+## 11. Prompt and context engineering
+
+### 11.1 Structure
+
+Every prompt is composed from:
+
+1. **`SYSTEM_PERSONA`** — identity and hard rules: *"Answer only from the CONTEXT
+   provided"*, *"Never invent ticket IDs, error codes, dates, SLA figures"*,
+   *"Never name an individual engineer as accountable — route by team"*.
+2. **`UNTRUSTED_DATA_NOTICE`** — the fence. Ticket bodies are wrapped in
+   `<<<TICKET_DATA>>>` … `<<<END_TICKET_DATA>>>` and explicitly designated as
+   evidence for extraction, never as instructions.
+3. **Task instruction** with an explicit output JSON schema naming its Pydantic
+   model, so the contract lives in one place.
+4. **Retrieved context**, labelled `[C1]`…`[Cn]` for citation.
+
+### 11.2 Context budget
+
+| Element | Budget |
+|---|---|
+| Ticket text into `assess` | truncated to 3000 characters |
+| Retrieved context | 6 chunks (chat) / 8 chunks (triage), ~900 chars each |
+| Chat short-term memory | last 12 turns verbatim |
+| Chat long-term memory | rolling summary, refreshed every 6 turns |
+| Rationale into a Jira comment | 400 chars + 600 chars for the recommended action |
+
+### 11.3 A lesson worth recording
+
+The prompts that fence untrusted ticket text were rewritten mid-build to remove
+phrases like *"ignore previous instructions"* from the **defensive** prompt itself.
+The hosting platform's own jailbreak classifier false-positives on those exact
+phrases regardless of whether they appear in an attack or a defence, and was
+blocking legitimate triage calls. Same semantics — ticket content is data, never a
+directive — different wording, so the defence does not trip the host's filter.
+
+---
+
+## 12. Responsible AI and guardrails
+
+### 12.1 Privacy
+
+**Two-pass de-identification at ingest.** Deterministic regex catches structured
+identifiers (email, phone, SSN, AWS keys, Azure connection strings, JWTs, PEM
+blocks) and domain PII (employee ID, internal IP). An optional LLM pass catches
+contextual identifiers (names, organisations) for documents over 120 characters.
+
+Secrets are **irreversibly** redacted (`[REDACTED_AWS_KEY]`); structured
+identifiers become **reversible** tokens (`[EMAIL_1]`) so a masked ticket remains
+readable and internally consistent.
+
+**Ticket IDs and error codes are deliberately excluded from every pattern.** They
+are the exact strings BM25 depends on; masking them would blind retrieval to the
+one thing that reliably identifies a recurring failure.
+
+**Output is scanned again** for leaks before anything is returned or written.
+
+### 12.2 Prompt injection
+
+Defence in depth, cheapest first:
+
+1. Length limit (4000 characters)
+2. Six high-precision regex signatures — microseconds, cannot hallucinate
+3. PII detection and masking
+4. **Only if still ambiguous**, an LLM injection classifier; blocks at
+   confidence ≥ 0.70
+
+Plus the structural defence: untrusted text is fenced as data in every prompt, and
+a blocked ticket short-circuits to `gate` so the injected text never reaches the
+classifier or the assessor.
+
+### 12.3 Hallucination control
+
+| Control | Threshold |
+|---|---|
+| Groundedness score on generated answers | refuse below **0.25**; ship with a visible caveat between 0.25 and 0.5 |
+| Policy violation | blocks regardless of groundedness score |
+| Banned phrasings | first-person claims that the current ticket is resolved, that the assistant resolved something, or an invented ETA not sourced from the SLA policy |
+| Aggregate figures | answered by SQL; the model only narrates — groundedness exact by construction |
+| Citation requirement | rationale must cite `[C#]` for any retrieved evidence used |
+
+Banned-phrasing rules are anchored to first-person claims about the *current*
+ticket, so citing a genuinely resolved precedent does not false-positive.
+
+### 12.4 Bias and fairness
+
+The `/evals` fairness table reports **per-team routing precision and recall** and
+**per-team over/under-severitisation rates**. The failure mode being watched for is
+systematic misrouting toward one team (which quietly becomes that team's on-call
+burden) or systematic severity inflation for one platform.
+
+**Known limitation:** fairness is measured on synthetic labelled data. Real
+production distributions will differ, and the eval set must be regenerated from
+real labelled history before any production claim.
+
+### 12.5 Explainability
+
+Every decision carries: the retrieved passages it was based on, an inline-cited
+rationale in plain English aimed at an on-call engineer, the confidence gates and
+**which gate limited the score**, the escalation reason when a human is required,
+and a persisted `triage_runs` row with the full decision JSON, model, tier, tokens,
+cost, latency and trace ID.
+
+### 12.6 Unauthorised tool execution
+
+`ai/tools.py::call()` is the single choke point. It enforces role scope before
+anything runs and audits denials as `tool.denied`. `ticket_update` — the only
+write-capable tool — additionally verifies the decision's status or auto-approve
+band **itself**, so a route that sets a status is never sufficient on its own.
+`POST /api/tickets/<id>/approve` refuses with 409 if the triage never completed,
+closing a real gap where an incomplete decision could write a blank comment onto a
+live Jira issue.
+
+---
+
+## 13. Security, identity and access governance
+
+| Concern | Implementation | Prototype gap |
+|---|---|---|
+| Authentication | JWT, HS256, 12h expiry; Werkzeug salted password hashes | No SSO/OIDC; no refresh tokens |
+| Authorisation | Role (`admin`/`manager`/`engineer`/`viewer`) + team clearances in the token | — |
+| Data access | ACL inside the Chroma `where` clause and inside the SQL query (`_scope_ticket_query`) | — |
+| Rate limiting | Per-route, per-minute; login 10/min, sync 6/min, recalculation 4/min | In-process only; needs shared state behind multiple workers |
+| Secrets | `.env`, git-ignored; empty defaults mean "do not write" rather than a wrong guess | No vault integration |
+| Transport | `DISABLE_SSL_VERIFY` defaults **true** for corporate TLS-inspecting proxies and local Ollama | **Must be `false` in production** |
+| Audit | Hash-chained append-only log; `GET /api/audit/verify` names the first broken row | Same-database chain; a production deployment should ship it to append-only external storage |
+| Webhook | `POST /api/integrations/webhook` is unauthenticated by design | **Requires a shared-secret header before facing a real network** |
+| Misuse monitoring | Every block, denial and guardrail firing is audited and queryable | No alerting on anomaly rates |
+
+**Least privilege by role:**
+
+| Capability | viewer | engineer | manager | admin |
+|---|---|---|---|---|
+| See own team's queue and history | — | ✓ | ✓ (all teams) | ✓ |
+| Ask the KB assistant | ✓ | ✓ | ✓ | ✓ |
+| Approve / override a decision | — | — | ✓ | ✓ |
+| Trigger a Jira sync | — | — | ✓ | ✓ |
+| Upload knowledge-base documents | — | — | ✓ | ✓ |
+| Delete a document | — | — | — | ✓ |
+| Bulk approve | — | — | — | ✓ |
+| Read the audit log | — | — | — | ✓ |
+
+> **Seeded-account caveat.** The demo account named `manager` carries the **`admin`**
+> role (`db/sqlite/models.py::_DEMO_USERS`). The `manager` role is fully wired into
+> every route guard, but no seeded account uses it — so the running demo does not
+> exercise the narrower privilege set. Add a genuine `manager`-role account before
+> using this table as evidence of least privilege in practice.
+
+---
+
+## 14. Integration architecture
+
+### 14.1 The `TicketSource` interface
+
+```python
+class TicketSource:
+    name: str
+    def fetch_since(self, watermark: str | None, limit: int = 50) -> list[dict]: ...
+    def update(self, external_id: str, fields: dict) -> None: ...
+    def add_comment(self, external_id: str, text: str) -> None: ...
+    def transition(self, external_id: str, status: str) -> None: ...
+```
+
+Four methods. Everything above this line — the graph, guardrails, database, UI —
+is vendor-agnostic. Two implementations ship: `JiraSource` and `SyntheticSource`.
+
+### 14.2 Jira Cloud adapter
+
+| Operation | Call |
+|---|---|
+| Fetch | `POST /rest/api/3/search/jql` — `project = {KEY} AND updated >= "{watermark}" ORDER BY updated ASC`, `maxResults=50` |
+| Update | `PUT /rest/api/3/issue/{key}` |
+| Comment | `POST /rest/api/3/issue/{key}/comment` (ADF body) |
+| Transition | `GET` then `POST /rest/api/3/issue/{key}/transitions` |
+
+**Auth:** HTTP Basic — base64(`JIRA_EMAIL:JIRA_API_TOKEN`).
+**Resilience:** 3 retries, exponential backoff from 1.5s, honours `Retry-After` on
+429, treats 5xx as retryable. A failed cycle returns zero tickets and logs; it
+never crashes the poller.
+
+**Inbound field mapping** (`issue_to_ticket_dict` — one function, used by both the
+poller and the webhook, so the two paths cannot drift):
+
+| Jira | Internal | Note |
+|---|---|---|
+| `key` | `external_id` | Dedupe key with `source` |
+| `summary` | `title` | |
+| `description` (ADF) | `body` | Flattened to text; tables and code blocks lose formatting but keep content |
+| `components[0]` | `application` | |
+| `reporter` / `assignee` | `reporter` / `assignee` | `displayName` — Jira Cloud withholds email by default under GDPR |
+| `priority.name` | `raw["priority"]` | **The reporter's own claim**, preserved for reported-vs-computed comparison |
+| `created` | `created_at` | The real incident start; the SLA clock uses this, not poll time. Used only on row creation, so a later edit never resets the SLA |
+| `updated` | `updated_at` | Drives the watermark |
+
+**Outbound write-back:**
+
+| What | How |
+|---|---|
+| Priority | `fields.priority.name` — `Highest`/`High`/`Medium`/`Low`. **By name, not ID** — Jira priority IDs are per-site and not guaranteed stable |
+| Team | Label `AWS`/`AZR`/`GCP`/`OPS`, with the other three removed in the same call so exactly one is ever present |
+| Rationale | ADF comment: decision, confidence, cited reasoning, recommended first action |
+| Workflow | Transition to `In Progress` (triaged/routed/synced) or `Done` (resolved). A transition name absent from that board's workflow is skipped with a warning |
+| Custom fields | Written **only** if `JIRA_FIELD_*` is configured; empty default means "do not write" rather than writing to the wrong place |
+| Assignee | **Never written** — routing is to a team by policy |
+
+**Idempotency:** dedupe on `(source, external_id)`; watermark persisted in
+`sync_state`; `sync_attempts` and `last_error` on every write; permanent failure →
+`status="failed"` dead letter; a manager's override is never clobbered by re-sync.
+
+### 14.3 Extending to ServiceNow
+
+A `ServiceNowSource` implementing the same four methods against the Table API
+(`/api/now/table/incident`) with `sys_updated_on` as the watermark. The mapping
+work is: `short_description → title`, `description → body`, `cmdb_ci →
+application`, `urgency`/`impact` → the reporter's priority claim, and
+`work_notes` for the rationale write-back. **No change is required to the graph,
+the guardrails, the database, or the UI.** Both sources can run concurrently
+because tickets key on `(source, external_id)`.
+
+### 14.4 Notification integration
+
+SLA warnings are sent via **Resend's HTTPS API** rather than SMTP, chosen because
+ports 25/465/587 are commonly blocked outbound on corporate networks that allow
+443 — confirmed on the deployment host. One transport, one thing to configure, no
+SMTP fallback. Recipients are looked up from `users.email` where the role is
+`admin` or `manager`, so adding a manager account is the only action needed to
+change who is notified. `sla_warning_sent_at` makes it one alert per ticket, not a
+repeat every 15-minute cycle.
+
+---
+
+## 15. API reference
+
+All routes are under `/api`. Success responses are `{"data": ..., "meta": {...}}`;
+failures are `{"error": {"code": ..., "message": ...}}`. List endpoints accept
+`?page=&page_size=&sort=&order=&q=&filter[key]=`.
+
+### Authentication and health
+
+| Method | Path | Auth | Purpose |
+|---|---|---|---|
+| GET | `/health` | none | Liveness + live config snapshot (provider, models, retrieval mode, indexed chunk count) |
+| POST | `/auth/login` | none | Issue JWT (10/min) |
+| GET | `/auth/me` | bearer | Caller's own claims |
+
+### Tickets and triage
+
+| Method | Path | Auth | Purpose |
+|---|---|---|---|
+| POST | `/tickets` | bearer | Ingest one ticket and run the full triage graph |
+| GET | `/tickets` | bearer | List tickets, ACL-scoped |
+| GET | `/tickets/<id>` | bearer | Ticket detail + last 5 triage runs |
+| GET | `/teams/queue` | bearer | Open queue with escalation fields |
+| PATCH | `/tickets/<id>/override` | bearer | Human override — `{field, new_value, reason}` |
+| POST | `/tickets/<id>/approve` | manager, admin | Approve and write back to Jira |
+| POST | `/tickets/bulk-approve` | admin | Approve up to 50 at once |
+
+### Integrations
+
+| Method | Path | Auth | Purpose |
+|---|---|---|---|
+| POST | `/integrations/sync` | manager, admin | Run one poll cycle now (6/min) |
+| POST | `/integrations/webhook` | **none** | Jira Automation push receiver |
+
+### Knowledge base and retrieval
+
+| Method | Path | Auth | Purpose |
+|---|---|---|---|
+| POST | `/documents/upload` | manager, admin | Upload and index a file |
+| POST | `/documents/text` | manager, admin | Paste and index text |
+| GET | `/documents` | bearer | List indexed documents |
+| DELETE | `/documents/<id>` | admin | Remove document and its chunks |
+| POST | `/search` | bearer | Retrieval only, no generation |
+
+### Chat
+
+| Method | Path | Auth | Purpose |
+|---|---|---|---|
+| POST | `/chat` | bearer | Multi-session KB chat |
+| POST | `/chatbot` | bearer | Server-pinned single-session chat |
+| GET / DELETE | `/chatbot/history` | bearer | Pinned session lifecycle |
+| GET | `/sessions` | bearer | List sessions |
+| GET | `/sessions/<id>/messages` | bearer | Paginated messages |
+| DELETE | `/sessions/<id>` | bearer | Delete a session |
+
+### Analytics, evaluation and audit
+
+| Method | Path | Auth | Purpose |
+|---|---|---|---|
+| GET | `/analytics/triage` | manager, admin | Control Tower aggregates (SQL) |
+| GET | `/analytics/usage` | bearer | Requests, latency, tokens, cost, error rate |
+| GET | `/analytics/traces` | bearer | Recent traces with stage breakdown |
+| GET | `/analytics/messages` | bearer | Chat latency/token series |
+| POST | `/analytics/recalculate-confidence` | manager, admin | Recompute confidence gates without a full re-triage (4/min) |
+| POST | `/evals/run` | manager, admin | KB eval set |
+| POST | `/evals/run-triage` | manager, admin | Held-out triage accuracy |
+| GET | `/evals` | bearer | Stored eval results |
+| POST | `/feedback` | bearer | Thumbs up/down on an answer |
+| GET | `/feedback` | manager, admin | Feedback queue |
+| PATCH | `/feedback/<id>/review` | manager, admin | Mark reviewed, supply a correction |
+| GET | `/audit` | admin | Audit log |
+| GET | `/audit/verify` | admin | Verify the hash chain |
+
+**Called by the frontend but not implemented server-side** (both degrade
+gracefully): `GET /tickets/<id>/timeline`, `POST /voice/transcribe`.
+
+---
+
+## 16. Observability and evaluation
+
+### 16.1 Tracing
+
+Every request runs inside a `Trace` context manager recording per-stage latency,
+prompt/completion tokens and estimated cost from a per-model price table. The last
+200 traces are held in an in-process ring buffer and exposed, expandable, on the
+Usage dashboard. Durable per-request metrics live in `chat_messages` and
+`triage_runs`.
+
+### 16.2 Audit
+
+Append-only, hash-chained: each entry hashes the previous one. Any edit breaks the
+chain and `verify_chain()` names the first bad row. Recorded events include login,
+retrieval, guardrail block, tool denial, triage decision, override, approval, sync,
+document upload and deletion.
+
+### 16.3 Evaluation suites
+
+| Suite | Command | Measures |
+|---|---|---|
+| KB quality | `POST /api/evals/run` | groundedness, context precision, context recall, hallucination, over 12 questions including ≥2 that must be refused |
+| Triage accuracy | `POST /api/evals/run-triage` | classification accuracy, routing precision, priority MAE, confusion matrix, per-team fairness, severity bias — over held-out labelled tickets |
+| Retrieval A/B | `run_retrieval_ab()` | hybrid vs vector hit rate over 12 probes |
+
+The KB eval runs through the **real** `handle_message()` path, guardrails included
+— it measures the shipped system, not a bypass.
+
+---
+
+## 17. Testing and quality assurance
+
+### 17.1 Test data design
+
+The 500-ticket synthetic corpus is generated with deliberate defects, because a
+triage system tested only on clean input is untested:
+
+| Property | Why |
+|---|---|
+| Typos and half-pasted stack traces | Real reporters write badly under pressure |
+| Duplicate reports of one outage | Exercises the duplicate detector |
+| **Planted secrets** (keys, connection strings, JWTs) | Exercises the redaction path — the test is that they never reach the index |
+| Prompt-injection attempts in ticket bodies | Exercises the input guard end to end |
+| Varied severity distribution | Prevents an eval score that is really just class imbalance |
+| Tickets with missing evidence | Exercises `evidence_coverage` and the human gate |
+| **100 held-out tickets, never embedded** | The exam the system cannot study for |
+
+### 17.2 Coverage beyond accuracy
+
+| Dimension | How it is checked |
+|---|---|
+| Accuracy | Held-out labelled set with a confusion matrix |
+| Groundedness | LLM-scored per answer, thresholded, persisted |
+| Hallucination | `1 − groundedness` plus banned-phrasing scan |
+| Refusal | Eval set includes unanswerable questions that must be refused |
+| Latency and cost | Per-stage traces, p95 in `usage_summary()` |
+| Reliability | Dead-letter counts, `sync_attempts`, `last_error` |
+| Traceability | Every decision reconstructible from `triage_runs` + `audit_log` |
+| Safety | Injection corpus, PII leak scan, tool-denial audit |
+| Consistency | `db/inspect_db.py` cross-store `DRIFT` check |
+
+### 17.3 Gaps
+
+No `pytest` suite, no CI pipeline, and no load test. Verification is via the eval
+endpoints, the cross-store inspector and manual scenario runs. A production
+hardening pass would add unit tests for the pure functions first — `_band_margin`,
+`_evidence_coverage`, `_score_confidence`, `normalize_priority`,
+`sla_elapsed_fraction` — since those are deterministic and carry the decision
+logic.
+
+---
+
+## 18. Non-functional characteristics
+
+### 18.1 Performance
+
+| Operation | Observed shape |
+|---|---|
+| One triage | 4–6 sequential model calls; deep tier dominates |
+| Sync batch | 50 tickets max per cycle, 4 in parallel |
+| Per-ticket timeout | `LLM_TIMEOUT_SECONDS × 6` (360s), then dead-lettered |
+| Retrieval | Chroma HNSW + BM25 over the in-memory index; sub-second at this corpus size |
+| Queue read | Pure SQL, no vector search — listing tickets never touches Chroma |
+
+**Latency budget by design:** the guardrail order is deterministic-first so the
+median ticket pays microseconds, not a model call. Retrieval fan-out, batch
+embedding and the parallel groundedness/policy check all use a shared bounded
+thread pool.
+
+> **A concurrency bug worth documenting.** Ticket-level parallelism uses a
+> **dedicated** `ThreadPoolExecutor`, not the shared fan-out pool. Submitting
+> tickets to the shared pool nested fan-out inside fan-out: each ticket occupied a
+> worker and then blocked waiting for a worker from the same fully-busy pool — a
+> real deadlock, hit live during the build. Two independent pools have no shared
+> resource cycle.
+
+### 18.2 Scalability
+
+| Dimension | Today | Path to production |
+|---|---|---|
+| Ticket volume | 50 per poll cycle, 4 concurrent | Replace the thread poller with a queue consumer (SQS/Service Bus); the `ingest_and_triage()` entry point is already a single idempotent unit of work |
+| Corpus size | Chroma with HNSW, single node | pgvector or a managed vector service; one module changes |
+| Concurrent users | Flask dev server, single process | Gunicorn/uvicorn workers behind a load balancer; move rate-limit state to Redis |
+| Relational volume | SQLite, single file | Postgres — SQLAlchemy models are portable; the additive migration helper becomes Alembic |
+| Model throughput | Gateway rate limits | Per-tier concurrency caps and a request queue; the tier split already reduces deep-tier pressure |
+| Cost | Per-run `cost_usd` recorded | The tier split is the primary lever; response caching for repeated KB questions is the next |
+
+### 18.3 Resilience
+
+Every dependency has a defined degraded mode:
+
+| Dependency fails | Behaviour |
+|---|---|
+| Model gateway | Local Ollama for all chat tiers |
+| Embedding service | Local `gte-large` with a loud warning and a reseed requirement |
+| Jira | Retry with backoff; then zero tickets this cycle; poller survives |
+| Any model call | Schema default; `route` falls back to deterministic keyword routing |
+| Retrieval quality | CRAG rewrite, then "no precedent" — never a silent bad match |
+| The graph itself | `needs_human=True`, `status="failed"`, row preserved for a human |
+| Process restart | Watermark resumed from `sync_state` |
+| Email transport | Warning logged; SLA state unchanged so the next cycle retries |
+
+**No single point of failure degrades to silence.** Every path terminates in a
+human seeing the ticket.
+
+---
+
+## 19. Deployment and environments
+
+### 19.1 Local development
+
+```bash
+# optional: local model fallback
+ollama serve
+
+# backend
+cd backend
+python -m venv .venv && .venv\Scripts\activate
+pip install -r requirements.txt
+copy .env.example .env          # then edit
+python run.py                   # http://127.0.0.1:5000
+
+# frontend
+cd frontend && npm install && npm run dev   # http://localhost:5173
+
+# seed the corpus, from the repo root with the backend venv active
+python db/vectordb/seed_vector_db.py --reset
+```
+
+Vite proxies `/api` to the backend, so there is **one origin and no CORS
+configuration anywhere in the project**. In production Flask serves
+`frontend/dist` directly.
+
+### 19.2 Environment matrix
+
+| Setting | Demo (offline) | Demo (live Jira) | Production target |
+|---|---|---|---|
+| `TICKET_SOURCE` | `synthetic` | `jira` | `jira` |
+| `LLM_PROVIDER` | `local` or `hosted` | `hosted` | `hosted` |
+| `DISABLE_SSL_VERIFY` | `true` | `true` | **`false`** |
+| `FLASK_DEBUG` | `true` | `true` | **`false`** |
+| `JWT_SECRET` | default | default | **rotated secret from a vault** |
+| `DATABASE_URL` | SQLite file | SQLite file | **Postgres** |
+| Vector store | Chroma local | Chroma local | **pgvector or managed** |
+| Webhook | unauthenticated | unauthenticated | **shared-secret header** |
+| Poller | in-process thread | in-process thread | **queue consumer** |
+
+### 19.3 Pre-production checklist
+
+- [ ] `DISABLE_SSL_VERIFY=false` and valid certificate chain
+- [ ] `FLASK_DEBUG=false`; run behind a production WSGI server
+- [ ] `JWT_SECRET` rotated and vault-sourced; SSO/OIDC in front
+- [ ] Webhook authenticated
+- [ ] Postgres + pgvector; Alembic migrations
+- [ ] Rate-limit state externalised (Redis)
+- [ ] Audit log shipped to append-only external storage
+- [ ] Eval set regenerated from real labelled history
+- [ ] Data retention and legal-hold policy implemented
+- [ ] Alerting on override rate, dead-letter count and guardrail firing rate
+
+---
+
+## 20. Operations runbook
+
+| Symptom | Diagnosis | Action |
+|---|---|---|
+| Sync pulls 0 tickets | Watermark past everything, or Jira auth failure | `select * from sync_state`; check logs for `Jira search failed`; verify credentials |
+| Every ticket `status=failed` | Model gateway unreachable and no local fallback | `GET /api/health` → check `provider`; start Ollama or fix the gateway |
+| Confidence uniformly low | Corpus not seeded, or ACL excluding everything | `GET /api/health` → `indexed_chunks`; re-run `seed_vector_db.py --reset` |
+| Retrieval returns nothing relevant | Embedding model changed without a reseed | Reseed; check logs for local-embedding fallback warnings |
+| `DRIFT` in the inspector | An index run failed halfway | Re-poll that ticket, or `seed_vector_db.py --reset` |
+| Jira writes fail silently | Custom field IDs wrong, or workflow transition name absent | Check logs for `no Jira transition named`; confirm names in `STATUS_TO_TRANSITION_NAME` |
+| Approvals rejected with 409 | Triage never completed for that ticket | Re-triage it; do not force-approve — the guard is correct |
+| Override reverted after a sync | Should not happen | `ingest_and_triage()` skips severity/team when `overridden_by` is set; check that the override actually persisted |
+| Deep-tier calls fail with `UnsupportedParamsError` | A new `gpt-5*`-class model not matched by `_effective_temperature()` | Extend the model-family match |
+| Poll cycle hangs | Nested thread-pool exhaustion | Confirm ticket parallelism still uses the dedicated `_TICKET_POOL` |
+
+**Standard inspection:**
+
+```bash
+python db/inspect_db.py                      # both stores + consistency check
+python db/inspect_db.py --sql "select external_id, severity, assigned_team, status from tickets"
+curl http://127.0.0.1:5000/api/health        # live provider/model/chunk count
+```
+
+---
+
+## 21. Known limitations and roadmap
+
+### Implemented but incomplete
+
+| Item | Current state | Next step |
+|---|---|---|
+| **15-metric priority rubric** | The rulebook is written; its **confidence** half is implemented (three gates, minimum, hard floors). The **score** half is not — `assess` asks the model for `priority_score` directly against band anchors. `backend/ai/severity_scoring.py` does not exist. | Add the pure-function scorer, change the assess prompt to emit 15 evidence-quoted ratings with no score field, and compute Impact/Urgency/band/score in Python |
+| **Reported-vs-computed priority** | The reporter's Jira priority is captured in `raw["priority"]` but not compared | Add the diff to `gate` with the asymmetric rule: upgrades auto-apply, **downgrades always need a human** — an AI that silently downgrades a human's P1 is the fastest way to lose an on-call team's trust |
+| **Capacity-aware routing** | `team_capacity` exists as a tool and the prompt mentions capacity, but its output is not injected into the routing call. Jira story points are readable but unread. | Inject capacity and committed story points into `triage_route`; this is the specific payoff of choosing Jira (ADR-001) |
+| **Per-ticket timeline API** | Frontend calls it and degrades gracefully | Implement `GET /tickets/<id>/timeline` over `audit_log` + `triage_runs` |
+| **Voice transcription fallback** | Browser Speech API works; the server endpoint does not exist | Implement `POST /voice/transcribe` against the Whisper model |
+| **Webhook authentication** | Unauthenticated by design for the demo | Shared-secret header before any real network exposure |
+
+### Structural limitations
+
+| Limitation | Impact | Mitigation path |
+|---|---|---|
+| Single-process poller | No horizontal scale-out of ingestion | Queue consumer |
+| SQLite | Write concurrency ceiling | Postgres |
+| Chroma single node | Corpus size ceiling | pgvector / managed vector service |
+| In-process rate limiting | Ineffective across workers | Redis |
+| Audit chain in the same database | A full-database compromise could rewrite it consistently | Ship to append-only external storage |
+| Synthetic evaluation data | Accuracy figures do not transfer to production distributions | Regenerate from real labelled history before any production claim |
+| No CI or unit tests | Regressions caught manually | Start with pure functions carrying decision logic |
+
+### Roadmap
+
+**Near term (completes the stated design).** Rulebook scorer; reported-vs-computed
+asymmetric gate; capacity-aware routing with story points; timeline API; unit tests
+on the pure decision functions.
+
+**Medium term (production readiness).** Postgres + pgvector; queue-based ingestion;
+SSO; external audit sink; CI with the eval suites as gates.
+
+**Longer term (product).** ServiceNow adapter running alongside Jira; active
+learning from the override stream — overrides are already captured as feedback
+rows, so retraining data accumulates from day one; SLA-aware routing that accounts
+for the receiving team's current burn-down.
+
+---
+
+## 22. Glossary
+
+| Term | Meaning |
+|---|---|
+| **ADF** | Atlassian Document Format — the JSON document structure Jira Cloud v3 uses for descriptions and comments instead of plain text |
+| **ACL** | Access control list — here, the per-chunk `allowed_roles`/`acl_<role>` metadata enforced inside the retrieval query |
+| **BM25** | A lexical ranking function — matches exact terms, which is why it finds error codes that dense embeddings blur |
+| **Band margin** | How far a priority score sits from a band boundary (25/50/75). Near a boundary the priority is a coin flip |
+| **CRAG** | Corrective RAG — grading retrieved chunks for relevance and re-retrieving or declaring "no precedent" instead of using a bad match |
+| **Dead letter** | A ticket whose processing failed permanently, preserved with its error rather than dropped |
+| **Evidence coverage** | Share of decision-critical evidence actually retrieved versus assumed |
+| **Gate (confidence)** | One of three named 0–1 signals; confidence is their minimum |
+| **Gate (node)** | The graph node that decides whether a human must review the decision |
+| **Groundedness** | Share of an answer's claims supported by the retrieved context |
+| **Held-out set** | Labelled tickets deliberately excluded from the index, used to measure accuracy honestly |
+| **HNSW** | The graph index Chroma uses to make nearest-neighbour search fast |
+| **Precedent agreement** | Share of retrieved precedent tickets that were given the same priority as this decision |
+| **RRF** | Reciprocal Rank Fusion — merges two ranked lists with incomparable score scales using `1/(k+rank)` |
+| **Trace** | A per-request record of stages, latency, tokens and cost |
+| **Watermark** | The last-seen `updated` timestamp, persisted so polling resumes rather than restarting |
