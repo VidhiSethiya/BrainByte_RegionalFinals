@@ -8,14 +8,14 @@ import AppLayout, { isManagerRole } from "./layouts/AppLayout";
 import History from "./pages/History";
 import Login from "./pages/Login";
 import Queue from "./pages/Queue";
-import Triage from "./pages/Triage";
 
 /**
- * Queue, Triage and History are the daily path and load eagerly. The rest —
- * everything that pulls in Recharts or the markdown renderer — is split out so
- * an engineer who never opens Control never downloads a charting library.
+ * Queue and History are the daily path and load eagerly. The rest —
+ * everything that pulls in Recharts or the markdown renderer, plus Triage
+ * (manager-only) — is split out so an engineer who never opens Control never
+ * downloads a charting library.
  */
-const Chat = lazy(() => import("./pages/Chat"));
+const Triage = lazy(() => import("./pages/Triage"));
 const Control = lazy(() => import("./pages/Control"));
 const Dashboard = lazy(() => import("./pages/Dashboard"));
 const Documents = lazy(() => import("./pages/Documents"));
@@ -68,7 +68,16 @@ export default function App() {
       >
         <Route index element={<RoleLanding />} />
         <Route path="queue" element={<Queue />} />
-        <Route path="triage" element={<Triage />} />
+        <Route
+          path="triage"
+          element={
+            <ManagerOnly>
+              <Suspense fallback={<Skeleton active paragraph={{ rows: 6 }} />}>
+                <Triage />
+              </Suspense>
+            </ManagerOnly>
+          }
+        />
         <Route path="history" element={<History />} />
         <Route
           path="control"
@@ -86,16 +95,6 @@ export default function App() {
             <ManagerOnly>
               <Suspense fallback={<Skeleton active paragraph={{ rows: 6 }} />}>
                 <Dashboard />
-              </Suspense>
-            </ManagerOnly>
-          }
-        />
-        <Route
-          path="chat"
-          element={
-            <ManagerOnly>
-              <Suspense fallback={<Skeleton active paragraph={{ rows: 6 }} />}>
-                <Chat />
               </Suspense>
             </ManagerOnly>
           }

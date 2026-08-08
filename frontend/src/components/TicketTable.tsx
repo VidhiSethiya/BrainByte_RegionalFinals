@@ -17,6 +17,7 @@ import SeverityTag, {
   RelativeTime,
   SlaCountdown,
   StatusTag,
+  TeamStatusTag,
   TeamTag,
 } from "./SeverityTag";
 import { FETCH_ALL_PAGE_SIZE, uiPagination } from "./uiPagination";
@@ -109,27 +110,8 @@ export default function TicketTable({
       sortOrder: sortOrder("severity"),
       render: (_value, row) => <SeverityTag severity={row.severity} />,
     },
-    {
-      title: "Priority",
-      dataIndex: "priority_score",
-      width: 92,
-      align: "right",
-      sorter: true,
-      sortOrder: sortOrder("priority_score"),
-      render: (value: number) => <span className="tabular">{value}</span>,
-    },
     ...(variant === "queue"
       ? ([
-          {
-            title: "Source",
-            dataIndex: "source",
-            width: 88,
-            render: (value: string) => (
-              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                {value || "—"}
-              </Typography.Text>
-            ),
-          },
           {
             title: "SLA",
             dataIndex: "sla_due_at",
@@ -174,7 +156,9 @@ export default function TicketTable({
       title: "Status",
       dataIndex: "status",
       width: 132,
-      render: (_value, row) => <StatusTag status={row.status} />,
+      // Manager sees the real pipeline status; a team member only needs to know
+      // whether it's still theirs to work, sitting with them, or done.
+      render: (_value, row) => (showTeam ? <StatusTag status={row.status} /> : <TeamStatusTag status={row.status} />),
     },
     ...(variant === "history"
       ? ([
@@ -185,20 +169,26 @@ export default function TicketTable({
             align: "right",
             render: (value: string | null) => <RelativeTime value={value} />,
           },
-          {
-            title: "Resolution",
-            dataIndex: "resolution_minutes",
-            width: 110,
-            align: "right",
-            sorter: true,
-            sortOrder: sortOrder("resolution_minutes"),
-            render: (value: number | null) =>
-              value === null ? (
-                <Typography.Text type="secondary">—</Typography.Text>
-              ) : (
-                <span className="tabular">{value} min</span>
-              ),
-          },
+          // Resolution time is a manager metric (SLA/throughput reporting) — a
+          // team member's own History doesn't need it.
+          ...(showTeam
+            ? ([
+                {
+                  title: "Resolution",
+                  dataIndex: "resolution_minutes",
+                  width: 110,
+                  align: "right",
+                  sorter: true,
+                  sortOrder: sortOrder("resolution_minutes"),
+                  render: (value: number | null) =>
+                    value === null ? (
+                      <Typography.Text type="secondary">—</Typography.Text>
+                    ) : (
+                      <span className="tabular">{value} min</span>
+                    ),
+                },
+              ] as ColumnsType<TicketRow>)
+            : []),
           {
             // Quietly the most interesting column on History: where a manager sees
             // how often the system was wrong, and why.

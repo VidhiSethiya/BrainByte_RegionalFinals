@@ -24,7 +24,6 @@ import {
   Skeleton,
   Space,
   Table,
-  Tag,
   Tooltip,
   Typography,
 } from "antd";
@@ -414,7 +413,7 @@ export default function Control() {
           label="SLA at risk"
           value={data?.sla_at_risk}
           tone={data?.sla_at_risk ? "warning" : "default"}
-          hint="Under 30 minutes to the response target"
+          hint="70% or more of the way through the Priority's SLA resolve window"
           loading={loading}
         />
         <StatTile
@@ -631,12 +630,6 @@ export default function Control() {
               dataIndex: "external_id",
               width: 130,
               render: (value: string) => <span className="data">{value}</span>,
-            },
-            {
-              title: "Source",
-              dataIndex: "source",
-              width: 80,
-              render: (value: string) => <Tag style={{ marginInlineEnd: 0 }}>{value}</Tag>,
             },
             { title: "Title", dataIndex: "title", ellipsis: true },
             {

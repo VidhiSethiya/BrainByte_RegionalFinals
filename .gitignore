@@ -9,7 +9,11 @@ venv/
 !.env.example
 
 # Generated state — delete db/sqlite/data and db/vectordb/data to reset everything
+# *.db-wal/*.db-shm: SQLite WAL mode (db/sqlite/models.py) writes these alongside
+# app.db and they churn on every request — never worth tracking.
 db/sqlite/data/*.db
+db/sqlite/data/*.db-wal
+db/sqlite/data/*.db-shm
 db/vectordb/data/chroma/
 db/vectordb/data/uploads/
 *.sqlite3

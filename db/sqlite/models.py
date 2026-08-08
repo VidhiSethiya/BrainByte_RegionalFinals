@@ -298,8 +298,22 @@ class Ticket(Base):
     updated_at = Column(DateTime, default=_now, onupdate=_now)
 
     def to_dict(self) -> dict:
-        from rag.schemas import normalize_severity
+        from rag.schemas import normalize_severity, sla_target_mins
 
+        severity = normalize_severity(self.severity) if self.severity else ""
+        # sla_due_at: created_at (the incident's real start time — see
+        # integrations/jira.py::issue_to_ticket_dict and ai/agents.py::
+        # ingest_and_triage for where that's set from Jira's "created" field,
+        # not our own ingestion time) plus the Priority's resolve target
+        # (rag/schemas.py::SLA_TARGET_MINS). None when there's no severity yet
+        # (triage hasn't run) or no created_at — the frontend's SlaCountdown
+        # already renders "—" for either.
+        resolve_mins = sla_target_mins(severity, "resolve") if severity else 0
+        sla_due_at = (
+            (self.created_at + dt.timedelta(minutes=resolve_mins)).isoformat()
+            if resolve_mins and self.created_at
+            else None
+        )
         return {
             "id": self.id,
             "external_id": self.external_id,
@@ -313,7 +327,7 @@ class Ticket(Base):
             "assignee": self.assignee,
             "category": self.category,
             "subcategory": self.subcategory,
-            "severity": normalize_severity(self.severity) if self.severity else "",
+            "severity": severity,
             "priority_score": self.priority_score,
             "assigned_team": self.assigned_team,
             "status": self.status,
@@ -321,6 +335,8 @@ class Ticket(Base):
             "needs_human": self.needs_human,
             "overridden_by": self.overridden_by,
             "override_reason": self.override_reason,
+            "sla_target_mins": resolve_mins or None,
+            "sla_due_at": sla_due_at,
             "true_category": self.true_category,
             "true_severity": normalize_severity(self.true_severity) if self.true_severity else self.true_severity,
             "true_team": self.true_team,

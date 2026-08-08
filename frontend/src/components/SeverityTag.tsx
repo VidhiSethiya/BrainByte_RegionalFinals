@@ -110,6 +110,40 @@ export function StatusTag({ status }: { status: TicketStatus | string }) {
   );
 }
 
+/**
+ * Team-facing status — collapses the full pipeline vocabulary (new/triaged/
+ * awaiting_approval/approved/routed/synced/resolved/failed, plus the AI's own
+ * needs_human hold) down to the three states an engineer actually acts on.
+ * The manager's queue/history keep the detailed StatusTag; this is only for
+ * the team layer (TicketTable's showTeam=false path).
+ */
+const TEAM_STATUS = {
+  closed: { label: "Closed", color: "success" },
+  assigned: { label: "Assigned", color: "processing" },
+  open: { label: "Open", color: "warning" },
+} as const;
+
+const TEAM_STATUS_MAP: Record<string, keyof typeof TEAM_STATUS> = {
+  resolved: "closed",
+  synced: "closed",
+  routed: "assigned",
+  approved: "assigned",
+  new: "open",
+  triaged: "open",
+  awaiting_approval: "open",
+  failed: "open",
+};
+
+export function TeamStatusTag({ status }: { status: TicketStatus | string }) {
+  const bucket = TEAM_STATUS_MAP[status] ?? "open";
+  const { label, color } = TEAM_STATUS[bucket];
+  return (
+    <Tag color={color} style={{ marginInlineEnd: 0 }}>
+      {label}
+    </Tag>
+  );
+}
+
 export function TeamTag({ team }: { team: Team | "" | null | undefined }) {
   if (!team) return <Tag style={{ marginInlineEnd: 0 }}>Unassigned</Tag>;
   return <Tag style={{ marginInlineEnd: 0 }}>{TEAM_LABEL[team as Team] ?? team}</Tag>;

@@ -23,7 +23,6 @@ import {
   Row,
   Select,
   Space,
-  Tabs,
   Tag,
 } from "antd";
 import { useState } from "react";
@@ -256,19 +255,6 @@ function LiveTriage() {
   );
 }
 
-function BulkTriage() {
-  return (
-    <Card size="small">
-      <Alert
-        type="info"
-        showIcon
-        message="Bulk triage is not available on the live backend yet"
-        description="Use Live triage for a single ticket, or Control Tower → Sync Now to pull Jira issues. The /tickets/bulk route ships in a later phase."
-      />
-    </Card>
-  );
-}
-
 export default function Triage() {
   return (
     <Flex vertical gap={24}>
@@ -280,12 +266,7 @@ export default function Triage() {
         </p>
       </Flex>
 
-      <Tabs
-        items={[
-          { key: "live", label: "Live triage", children: <LiveTriage /> },
-          { key: "bulk", label: "Bulk", children: <BulkTriage /> },
-        ]}
-      />
+      <LiveTriage />
     </Flex>
   );
 }

@@ -343,6 +343,13 @@ def issue_to_ticket_dict(issue: dict) -> dict[str, Any]:
             "issuetype": (fields.get("issuetype") or {}).get("name", ""),
         },
         "updated_at": fields.get("updated") or "",
+        # SLA countdown (rag/schemas.py::sla_elapsed_fraction, Ticket.to_dict's
+        # sla_due_at) needs the incident's real start time — Jira's "updated"
+        # field above is not it. ingest_and_triage() uses this only when first
+        # creating the row; on later re-fetches the row already has its
+        # created_at and this is ignored, so an update to the Jira issue never
+        # resets its SLA clock.
+        "created_at": fields.get("created") or "",
     }
 
 

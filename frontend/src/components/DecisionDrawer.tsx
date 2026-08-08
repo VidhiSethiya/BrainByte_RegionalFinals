@@ -271,7 +271,6 @@ export function DecisionBody({
     { label: "Cost", value: `$${detail.cost_usd.toFixed(4)}` },
     { label: "Trace id", value: detail.trace_id },
     { label: "Retrieval", value: health?.retrieval_mode ?? "—" },
-    { label: "Source", value: ticket.source },
     { label: "Guardrails", value: guardrails.length ? guardrails.map((g) => g.type).join(", ") : "none fired" },
   ];
 
@@ -308,7 +307,6 @@ export function DecisionBody({
           )}
           <StatusTag status={ticket.status} />
           <TeamTag team={displayTeam} />
-          <Tag style={{ marginInlineEnd: 0 }}>{ticket.source}</Tag>
           {ticket.overridden_by && <Tag color="warning">Overridden by {ticket.overridden_by}</Tag>}
         </Space>
       </Flex>
@@ -543,16 +541,21 @@ export function DecisionBody({
         </Typography.Paragraph>
       </Flex>
 
-      {!readOnly && (
+      {/* Accept / Reassign / Dispute are manager-only actions (a team member
+          works the ticket, they don't change its priority or routing — that
+          decision, and reversing it, belongs to whoever is accountable for
+          the queue). The backend's own /approve and /override routes are
+          already role-gated the same way; this just stops the buttons from
+          being shown to someone who'd only get a 403 clicking them. */}
+      {!readOnly && canApprove && (
         <>
           <Divider style={{ margin: 0 }} />
           <Flex gap={8} wrap>
-            {canApprove && ticket.needs_human && (
+            {ticket.needs_human ? (
               <Button type="primary" icon={<CheckOutlined />} loading={busy} onClick={onApprove}>
                 Approve escalation
               </Button>
-            )}
-            {!(canApprove && ticket.needs_human) && (
+            ) : (
               <Button type="primary" icon={<CheckOutlined />} loading={busy} onClick={onAccept} disabled={blocked}>
                 Accept decision
               </Button>
@@ -571,6 +574,14 @@ export function DecisionBody({
               </Tooltip>
             )}
           </Flex>
+        </>
+      )}
+      {!readOnly && !canApprove && (
+        <>
+          <Divider style={{ margin: 0 }} />
+          <Typography.Text type="secondary" style={{ fontSize: 13 }}>
+            Approving, reassigning, or disputing this decision requires manager access.
+          </Typography.Text>
         </>
       )}
 
@@ -730,7 +741,7 @@ export default function DecisionDrawer({
             <Alert
               type="info"
               showIcon
-              message={`${ticket.external_id} · ${ticket.source}`}
+              message={ticket.external_id}
               description={
                 ticket.last_error
                   ? `Last error: ${ticket.last_error}`

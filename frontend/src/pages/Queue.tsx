@@ -184,7 +184,7 @@ export default function Queue() {
             loading={tilesLoading}
             hint={
               manager
-                ? "Under 30 minutes to the response target"
+                ? "70% or more of the way through the Priority's SLA resolve window"
                 : "SLA aggregates require manager analytics access"
             }
           />

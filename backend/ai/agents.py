@@ -600,6 +600,33 @@ def triage_assess(state: TriageState) -> TriageState:
     }
 
 
+def _parse_iso_datetime(value: str):
+    """Best-effort ISO-8601 parse for a ticket source's real start time (e.g.
+    Jira's "created" field, "2026-08-07T22:37:41.973+0530"). Returns a naive
+    UTC datetime, matching every other timestamp column in this schema
+    (db/sqlite/models.py::_now) — never raises; a bad/unfamiliar format just
+    means the row keeps its default creation-time value instead.
+    """
+    from datetime import datetime
+
+    raw = value.strip()
+    if not raw:
+        return None
+    try:
+        # Python's fromisoformat wants "+05:30", not Jira's "+0530".
+        normalized = raw
+        if len(raw) >= 5 and raw[-5] in "+-" and raw[-4:].isdigit():
+            normalized = f"{raw[:-2]}:{raw[-2:]}"
+        parsed = datetime.fromisoformat(normalized)
+        if parsed.tzinfo is not None:
+            from datetime import timezone
+
+            parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
+        return parsed
+    except ValueError:
+        return None
+
+
 def _rule_route(application: str) -> str:
     """Deterministic fallback so triage_route() never crashes on an unparseable
     response. Phase 2's ai/tools.py::rule_route() replaces this with a real
@@ -1134,6 +1161,17 @@ def ingest_and_triage(raw_ticket: dict, user: dict) -> tuple[TicketRow, TriageSt
                     assignee=str(raw_ticket.get("assignee") or ""),
                     status="new",
                 )
+                # SLA countdown (rag/schemas.py::sla_elapsed_fraction, Ticket.to_dict's
+                # sla_due_at) has to start from when the incident actually began, not
+                # from whenever our poller happened to first see it — otherwise a
+                # ticket the poller was late fetching would get extra SLA time it
+                # never had. Falls back to the column default (row creation time)
+                # for synthetic/manual sources with no real external start time.
+                created_raw = str(raw_ticket.get("created_at") or "").strip()
+                if created_raw:
+                    parsed_created = _parse_iso_datetime(created_raw)
+                    if parsed_created:
+                        row.created_at = parsed_created
                 s.add(row)
             else:
                 row.title = str(raw_ticket.get("title") or row.title)

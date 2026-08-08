@@ -13,7 +13,6 @@ import {
   FileTextOutlined,
   HistoryOutlined,
   LogoutOutlined,
-  MessageOutlined,
   ThunderboltOutlined,
   UnorderedListOutlined,
   UserOutlined,
@@ -39,10 +38,11 @@ interface NavItem {
 
 const NAV: NavItem[] = [
   { key: "/queue", icon: <UnorderedListOutlined />, label: "My Queue" },
-  { key: "/triage", icon: <ThunderboltOutlined />, label: "Triage" },
+  // Triage is manager-only: an engineer works their team queue, they don't
+  // submit new tickets for triage or dispatch bulk runs.
+  { key: "/triage", icon: <ThunderboltOutlined />, label: "Triage", managerOnly: true },
   { key: "/history", icon: <HistoryOutlined />, label: "History" },
   { key: "/control", icon: <ApartmentOutlined />, label: "Control Tower", managerOnly: true },
-  { key: "/chat", icon: <MessageOutlined />, label: "Assistant", managerOnly: true },
   { key: "/documents", icon: <FileTextOutlined />, label: "Knowledge Base", managerOnly: true },
   { key: "/evals", icon: <ExperimentOutlined />, label: "Evaluations", managerOnly: true },
   { key: "/dashboard", icon: <DashboardOutlined />, label: "Usage", managerOnly: true },

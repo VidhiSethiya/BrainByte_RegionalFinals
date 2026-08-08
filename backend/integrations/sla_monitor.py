@@ -57,17 +57,27 @@ _SEVERITY_COLOR = {
 }
 
 
-def _breach_email(ticket, due_at: datetime, now: datetime) -> tuple[str, str, str]:
+def _breach_email(ticket, due_at: datetime, now: datetime, elapsed_frac: float) -> tuple[str, str, str]:
     """Deterministic template, not LLM-generated — same principle as the SLA
     figures themselves (rag/schemas.py::SLA_TARGET_MINS): a notification about
     a lookup number should not itself be a place for the model to improvise.
+
+    `elapsed_frac` is the ticket's *actual* elapsed fraction at send time, not
+    SLA_WARNING_THRESHOLD — the check runs every SLA_CHECK_SECONDS and the
+    warning is one-shot, so a ticket is very often already past 70% (75%,
+    90%, overdue) by the time this fires. Displaying the fixed threshold
+    instead of the real number here previously made "remaining" and "% of
+    window elapsed" contradict each other in the email.
 
     Returns (subject, plain_text_body, html_body) — the HTML version is what
     every modern mail client actually renders; the plain-text one is the
     multipart/alternative fallback (see integrations/notifications.py).
     """
     incident = ticket.external_id or ticket.id
-    pct = int(settings.SLA_WARNING_THRESHOLD * 100)
+    pct = round(elapsed_frac * 100)
+    # "reached 105%" reads oddly — a ticket that's already past due gets "exceeded",
+    # only one still inside its window gets "reached".
+    pct_verb = "exceeded" if pct >= 100 else "reached"
     due_str = _format_due(due_at)
     remaining_str = _format_remaining(due_at, now)
     color = _SEVERITY_COLOR.get(ticket.severity, _SEVERITY_COLOR["Low"])
@@ -78,7 +88,7 @@ def _breach_email(ticket, due_at: datetime, now: datetime) -> tuple[str, str, st
     text_body = (
         f"Hello,\n\n"
         f"This is an automated notice that incident {incident} "
-        f"has reached {pct}% of its {ticket.severity} priority SLA resolution window.\n\n"
+        f"has {pct_verb} {pct}% of its {ticket.severity} priority SLA resolution window.\n\n"
         f"Incident: {incident}\n"
         f"Title: {ticket.title}\n"
         f"Priority: {ticket.severity}\n"
@@ -123,7 +133,7 @@ def _breach_email(ticket, due_at: datetime, now: datetime) -> tuple[str, str, st
       <tr>
         <td style="padding:24px 28px 8px 28px;font-family:Segoe UI,Arial,sans-serif;
                    color:#334155;font-size:14px;line-height:1.5;">
-          This is an automated notice that the incident below has reached <b>{pct}%</b>
+          This is an automated notice that the incident below has {pct_verb} <b>{pct}%</b>
           of its resolution SLA window.
         </td>
       </tr>
@@ -216,7 +226,7 @@ def check_sla_breaches() -> dict[str, Any]:
 
             resolve_mins = sla_target_mins(row.severity, "resolve")
             due_at = row.created_at + timedelta(minutes=resolve_mins)
-            subject, text_body, html_body = _breach_email(row, due_at, now)
+            subject, text_body, html_body = _breach_email(row, due_at, now, frac)
             sent = send_email(recipients, subject, text_body, html_body) if recipients else False
 
             row.sla_warning_sent_at = now
